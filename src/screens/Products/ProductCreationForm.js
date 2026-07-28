@@ -272,7 +272,9 @@ const ProductCreationForm = ({ navigation, route }) => {
         Toast.show({
           type: 'error',
           text1: isEdit ? 'Save failed' : 'Create failed',
-          text2: resp.error.message || resp.error.data?.message || 'Could not save product',
+          // Odoo's JSON-RPC error puts a generic "Odoo Server Error" in
+          // .message and the useful text in .data.message — prefer the latter.
+          text2: resp.error.data?.message || resp.error.message || 'Could not save product',
           position: 'bottom',
         });
         return;

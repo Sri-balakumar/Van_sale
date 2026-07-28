@@ -2458,7 +2458,7 @@ export const isOrderMarkedRefunded = async (orderId) => {
 // api/services/generalApi.js
 import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import ODOO_BASE_URL, { getOdooUrl } from '@api/config/odooConfig';
+import ODOO_BASE_URL, { getOdooUrl, getOdooDb } from '@api/config/odooConfig';
 
 
 import { get } from "./utils";
@@ -2772,6 +2772,74 @@ export const fetchProductCategoriesOdoo = async () => {
     console.warn('fetchProductCategoriesOdoo error:', e?.message);
     return [];
   }
+};
+
+// Odoo's own default for product.template.categ_id is
+// env.ref('product.product_category_all'). On DBs where that category or its
+// external ID was deleted the default resolves to False, that falsy value
+// reaches product_template.create as an explicit key (so the template's own
+// default is skipped) and Postgres rejects the NOT NULL on categ_id. Odoo web
+// hides the problem because its form makes the user pick a category by hand.
+// Resolve a real category ourselves so create never depends on that default.
+let _defaultCategCache = { key: null, id: null };
+
+export const resolveDefaultProductCategoryId = async () => {
+  const key = `${getOdooUrl()}|${getOdooDb()}`;
+  if (_defaultCategCache.key === key && _defaultCategCache.id) {
+    return _defaultCategCache.id;
+  }
+  const baseUrl = getOdooUrl();
+  const call = async (model, method, args, kwargs = {}) => {
+    const resp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+      jsonrpc: '2.0', method: 'call',
+      params: { model, method, args, kwargs },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data && resp.data.error) {
+      const e = new Error('Odoo JSON-RPC error'); e.payload = resp.data.error; throw e;
+    }
+    return resp.data.result;
+  };
+
+  let id = null;
+  // 1. The standard "All" category by external ID. Confirm the target row still
+  //    exists — a stale ir.model.data pointing at a deleted category would give
+  //    an FK error at create time instead of a clean fallback.
+  try {
+    const rows = await call('ir.model.data', 'search_read',
+      [[['module', '=', 'product'], ['name', '=', 'product_category_all']]],
+      { fields: ['res_id'], limit: 1 });
+    const resId = rows?.[0]?.res_id || null;
+    if (resId) {
+      const cat = await call('product.category', 'search_read',
+        [[['id', '=', resId]]], { fields: ['id'], limit: 1 });
+      if (cat?.[0]?.id) id = cat[0].id;
+    }
+  } catch (e) {
+    console.warn('[categ] xmlid lookup failed:', e?.payload?.data?.message || e?.message);
+  }
+  // 2. A category literally named "All".
+  if (!id) {
+    try {
+      const rows = await call('product.category', 'search_read',
+        [[['name', '=', 'All']]], { fields: ['id'], limit: 1 });
+      if (rows?.[0]?.id) id = rows[0].id;
+    } catch (e) {
+      console.warn('[categ] name="All" lookup failed:', e?.payload?.data?.message || e?.message);
+    }
+  }
+  // 3. Anything at all — the oldest category on the DB.
+  if (!id) {
+    try {
+      const rows = await call('product.category', 'search_read',
+        [[]], { fields: ['id'], order: 'id asc', limit: 1 });
+      if (rows?.[0]?.id) id = rows[0].id;
+    } catch (e) {
+      console.warn('[categ] first-category lookup failed:', e?.payload?.data?.message || e?.message);
+    }
+  }
+
+  if (id) _defaultCategCache = { key, id };
+  return id;
 };
 
 // Fetch pos.category — the POS cashier-screen grouping. Includes the integer
@@ -3183,7 +3251,17 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, posCateg
     sale_ok: true,
     purchase_ok: true,
   };
-  if (categId) vals.categ_id = categId;
+  // categ_id is required on product.template but the form never collects it —
+  // its "Category" picker writes pos_categ_ids, a different field. Resolve one
+  // explicitly instead of trusting Odoo's default, which is broken on DBs
+  // missing the `product.product_category_all` external ID. If the lookup
+  // itself fails we still send the create without it, so a healthy DB behaves
+  // exactly as before.
+  const resolvedCategId = categId ? Number(categId) : await resolveDefaultProductCategoryId();
+  if (resolvedCategId) vals.categ_id = resolvedCategId;
+  console.log('[createProductOdoo] categ_id:', resolvedCategId || 'unresolved',
+    categId ? '(from caller)' : '(resolved default)');
+
   const createPosIds = (Array.isArray(posCategoryIds) ? posCategoryIds : (posCategoryId ? [posCategoryId] : []))
     .map(Number).filter(Boolean);
   if (createPosIds.length) {
@@ -3239,6 +3317,9 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, posCateg
       sale_ok: true,
       purchase_ok: true,
     };
+    // categ_id is required — dropping it from the retry (as this fallback used
+    // to) guaranteed the retry failed the same way the first attempt did.
+    if (vals.categ_id) safe.categ_id = vals.categ_id;
     if (vals.is_storable !== undefined) safe.is_storable = vals.is_storable;
     if (vals.list_price !== undefined) safe.list_price = vals.list_price;
     if (vals.standard_price !== undefined) safe.standard_price = vals.standard_price;
@@ -3250,6 +3331,12 @@ export const createProductOdoo = async ({ name, categId, posCategoryId, posCateg
       productId = await callCreate(safe);
     } catch (err2) {
       console.error('createProductOdoo safe create also failed:', err2?.payload || err2?.message);
+      const raw = err2?.payload?.data?.message || err2?.payload?.message || err2?.message || '';
+      // Only reachable when we couldn't resolve a category at all — give the
+      // user the fix instead of a Postgres NOT NULL traceback.
+      if (/categ_id/i.test(raw)) {
+        return { error: { message: 'No product category exists in Odoo. Create one under Inventory → Configuration → Product Categories, then try again.' } };
+      }
       return { error: err2?.payload || { message: err2?.message || 'Create failed' } };
     }
   }
@@ -3421,7 +3508,9 @@ export const updateProductOdoo = async (arg, opts = {}) => {
 
   const vals = {};
   if (name !== undefined) vals.name = String(name).trim();
-  if (categId !== undefined) vals.categ_id = categId || false;
+  // Never write a falsy categ_id — it's required on product.template, so
+  // clearing it raises the same NOT NULL error the create path used to hit.
+  if (categId) vals.categ_id = Number(categId);
   if (posCategoryIds !== undefined) {
     // Many2many replace: set the exact list (empty clears + hides from POS).
     const ids = (Array.isArray(posCategoryIds) ? posCategoryIds : []).map(Number).filter(Boolean);
