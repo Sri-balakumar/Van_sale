@@ -85,6 +85,19 @@ export const generateInvoiceHtml = ({
   // whole signature block is left out.
   shopOwnerSignature = null,
   customerSignature = null,
+  // Customer Due block — what this customer owed BEFORE this order, what this
+  // order leaves unpaid, and the resulting balance. Omitted (or a zero total)
+  // hides the block entirely, so a settled customer's receipt is unchanged.
+  // Mirrors the server-rendered block in pos_dynamic_invoice, which takes over
+  // whenever that module is enabled (see resolveInvoiceHtml).
+  previousDue = 0,
+  thisInvoiceDue = 0,
+  totalDue = 0,
+  // Document number printed verbatim on the "No:" line. POS callers omit it
+  // and keep the extractOrderRef behaviour (trailing digits of the order
+  // name); an account.move passes its full name ("INV/2026/00012"), which
+  // extractOrderRef would otherwise strip down to "00012".
+  docNumber = '',
 } = {}) => {
   console.log('[INVOICE:HTML] injecting company =', companyProfile?.name || '(none)', 'cashier =', cashierName);
   const pageWidth = Math.max(20, Number(paperWidthMm) || 80);
@@ -101,7 +114,7 @@ export const generateInvoiceHtml = ({
   // Custom size can pin a fixed page height; 0 = auto (continuous roll).
   const pageHeight = Math.max(0, Number(paperHeightMm) || 0);
   const pageSizeCss = pageHeight > 0 ? `${pageWidth}mm ${pageHeight}mm` : `${pageWidth}mm auto`;
-  const orderRef = extractOrderRef(orderName, orderId);
+  const orderRef = docNumber || extractOrderRef(orderName, orderId);
   // Use the active currency (set by post-login fetch and boot-time hydration
   // from AsyncStorage) and the active "Product Price" decimal precision pulled
   // from Odoo's decimal.precision table. Matches the rest of the app —
@@ -239,6 +252,15 @@ export const generateInvoiceHtml = ({
           : `<div class="paymentRow"><div>Cash:</div><div>${formatCurrencyHtml(Number(paidAmount > 0 ? paidAmount : (total || subtotal)))}</div></div>
              <div class="paymentRow"><div>Change / الباقي:</div><div>${formatCurrencyHtml(Number((paidAmount > (total || subtotal) ? (paidAmount - (total || subtotal)) : 0)))}</div></div>`
       }
+
+      ${Number(totalDue) > 0 ? `
+      <div style="border-top:1px solid #000; margin-top:8px; padding-top:6px;"></div>
+      <div class="totals">
+        <div class="line"><div class="label">Previous Due / الرصيد السابق</div><div class="value">${formatCurrencyHtml(Number(previousDue) || 0)}</div></div>
+        <div class="line"><div class="label">This Invoice / هذه الفاتورة</div><div class="value">${formatCurrencyHtml(Number(thisInvoiceDue) || 0)}</div></div>
+        <div style="height:6px; border-bottom:2px solid #000; margin-top:6px;"></div>
+        <div class="line" style="font-size:13px; font-weight:700;"><div class="label">Total Due / إجمالي المستحق</div><div class="value">${formatCurrencyHtml(Number(totalDue))}</div></div>
+      </div>` : ''}
 
       ${(shopOwnerSignature || customerSignature) ? `
       <div style="border-top:1px solid #000; margin-top:10px; padding-top:8px; direction:ltr;">

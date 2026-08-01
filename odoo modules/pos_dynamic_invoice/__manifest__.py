@@ -1,6 +1,6 @@
 {
     'name': 'POS Dynamic Invoice',
-    'version': '19.0.23.0.0',
+    'version': '19.0.30.0.0',
     'category': 'Point of Sale',
     'summary': 'Editable, branded POS invoice (logo, company name, GST, footer, '
                'terms) rendered server-side at all 6 receipt sizes. When this '
@@ -32,7 +32,10 @@
     'author': 'Alphalize Technologies',
     'website': 'https://www.alphalize.com',
     'license': 'LGPL-3',
-    'depends': ['base', 'point_of_sale'],
+    # `account` is required by the Customer Due block (reads the partner's open
+    # receivable lines) and by the account.move receipt renderer, which lets an
+    # Accounting invoice print through the same four templates as a POS order.
+    'depends': ['base', 'point_of_sale', 'account'],
     'data': [
         'security/ir.model.access.csv',
         'report/pos_dynamic_invoice_report.xml',

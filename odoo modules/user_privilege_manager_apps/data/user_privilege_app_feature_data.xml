@@ -435,6 +435,13 @@
         <field name="parent_id" ref="feature_home_tile_invoices"/>
         <field name="sequence">214</field>
     </record>
+    <record id="feature_acc_invoice_print_pdf" model="app.feature.app">
+        <field name="feature_key">accounting.invoice.print_pdf</field>
+        <field name="name">Invoice - Print PDF</field>
+        <field name="description">Show the Print PDF button on the invoice detail screen (prints the invoice through the configured invoice template at the configured receipt size).</field>
+        <field name="parent_id" ref="feature_home_tile_invoices"/>
+        <field name="sequence">215</field>
+    </record>
 
     <!-- Accounting: invoice list filter buttons -->
     <record id="feature_acc_invoice_filters" model="app.feature.app">

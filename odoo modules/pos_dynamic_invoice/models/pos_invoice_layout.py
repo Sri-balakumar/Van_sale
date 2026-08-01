@@ -13,6 +13,7 @@ BLOCK_TYPES = [
     ('items_table', 'Items Table'),
     ('totals', 'Totals'),
     ('payments', 'Payments'),
+    ('customer_due', 'Customer Due'),
     ('signatures', 'Signatures'),
     ('footer', 'Footer'),
     ('barcode', 'Barcode'),
@@ -124,8 +125,9 @@ class PosInvoiceLayout(models.Model):
             (6, 0, 100, 'items_table', {}),
             (7, 0, 100, 'totals', {}),
             (8, 0, 100, 'payments', {}),
-            (9, 0, 100, 'signatures', {}),
-            (10, 0, 100, 'footer', {}),
+            (9, 0, 100, 'customer_due', {}),
+            (10, 0, 100, 'signatures', {}),
+            (11, 0, 100, 'footer', {}),
         ]
         for row, col, width, btype, extra in spec:
             Block.create(dict(

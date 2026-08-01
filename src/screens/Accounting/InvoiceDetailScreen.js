@@ -14,6 +14,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, TouchableOpacity, ActivityIndicator, ScrollView, StyleSheet, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getOdooUrl } from '@api/config/odooConfig';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -31,8 +32,12 @@ import {
   cancelInvoiceOdoo,
   createCreditNoteOdoo,
   registerPaymentForInvoiceOdoo,
+  resolveAccountInvoiceHtml,
+  fetchAppPaperSize,
 } from '@api/services/generalApi';
+import { printPageSize } from '@utils/invoiceHtml';
 import PayInvoiceModal from '@components/Modal/PayInvoiceModal';
+import PaperSizeModal from '@components/Modal/PaperSizeModal';
 import ConfirmModal from '@components/Modal/ConfirmModal';
 import { FeatureGate } from '@components/FeatureGate';
 
@@ -85,6 +90,8 @@ const paymentStateLabel = (ps) => {
 const InvoiceDetailScreen = ({ navigation, route }) => {
   const invoiceId = route?.params?.invoiceId;
   const currency = useAuthStore((s) => s.currency);
+  // Letterhead for the printed invoice (same source the POS receipt uses).
+  const companyProfile = useAuthStore((s) => s.companyProfile);
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
@@ -107,6 +114,49 @@ const InvoiceDetailScreen = ({ navigation, route }) => {
   }, [invoiceId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Print — renders the invoice through the SAME templates as a POS receipt
+  // (Standard / Dynamic / Cash Memo / Custom Layout) at the configured paper
+  // size, then hands it to the OS print dialog. Distinct from Download PDF
+  // below, which fetches Odoo's official A4 report unchanged.
+  const [printing, setPrinting] = useState(false);
+  const [sizePicker, setSizePicker] = useState(false);
+  const [paperCfg, setPaperCfg] = useState({ enabled: false, mm: null, heightMm: 0 });
+  useEffect(() => {
+    let alive = true;
+    fetchAppPaperSize().then((cfg) => { if (alive) setPaperCfg(cfg); });
+    return () => { alive = false; };
+  }, []);
+
+  const runPrint = async (paperWidthMm, paperHeightMm = 0) => {
+    if (!invoice) return;
+    setPrinting(true);
+    try {
+      const html = await resolveAccountInvoiceHtml({
+        invoice,
+        paperWidthMm,
+        paperHeightMm,
+        companyProfile,
+        cashierName: Array.isArray(invoice.invoice_user_id) ? invoice.invoice_user_id[1] : 'Cashier',
+      });
+      // Exact page size (points) so the printer prints at 100%, no scaling.
+      await Print.printAsync({ html, ...printPageSize(paperWidthMm, paperHeightMm) });
+    } catch (err) {
+      // Dismissing the print dialog rejects on iOS — only toast real failures.
+      if (err?.message && !/cancel/i.test(err.message)) {
+        showToastMessage(err.message || 'Print failed');
+      }
+    } finally {
+      setPrinting(false);
+    }
+  };
+
+  // Same rule as the POS receipt: a configured default size prints straight
+  // away, otherwise ask. Keeps both prints consistent for the user.
+  const startPrint = () => {
+    if (paperCfg.enabled && paperCfg.mm) runPrint(paperCfg.mm, paperCfg.heightMm);
+    else setSizePicker(true);
+  };
 
   const runAction = async (fn, successMsg) => {
     setActing(true);
@@ -459,6 +509,20 @@ const InvoiceDetailScreen = ({ navigation, route }) => {
                 />
               </FeatureGate>
             ) : null}
+            {/* Print — renders through the shop's configured invoice template
+                at the configured paper size, unlike Download PDF above which
+                always gives Odoo's official A4 report. */}
+            {!isDraft ? (
+              <FeatureGate featureKey="accounting.invoice.print_pdf">
+                <ActionButton
+                  icon="print"
+                  label={printing ? 'Preparing…' : 'Print PDF'}
+                  onPress={startPrint}
+                  disabled={acting || printing || downloading}
+                  variant="secondary"
+                />
+              </FeatureGate>
+            ) : null}
             {isDraft ? (
               <FeatureGate featureKey="accounting.invoice.post">
                 <ActionButton icon="check-circle" label="Confirm & Post" onPress={onPost} disabled={acting} />
@@ -484,6 +548,18 @@ const InvoiceDetailScreen = ({ navigation, route }) => {
           </View>
         </ScrollView>
       </RoundedContainer>
+      {/* Offer the company's CONFIGURED sizes, not the modal's built-in six —
+          picking a width with no pos.invoice.paper.size record makes the server
+          fail to resolve a layout and silently print Standard instead. Same
+          spread as OrderDetailScreen / CreateInvoicePreview. */}
+      <PaperSizeModal
+        isVisible={sizePicker}
+        {...((paperCfg?.presets || []).length
+          ? { sizes: paperCfg.presets.map((p) => ({ inch: p.label, mm: p.mm })) }
+          : {})}
+        onCancel={() => setSizePicker(false)}
+        onSelect={(mm, heightMm = 0) => { setSizePicker(false); runPrint(mm, heightMm); }}
+      />
       <PayInvoiceModal
         isVisible={payModalVisible}
         invoice={invoice}

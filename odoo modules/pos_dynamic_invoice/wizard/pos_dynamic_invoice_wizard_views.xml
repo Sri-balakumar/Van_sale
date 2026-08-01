@@ -10,6 +10,7 @@
         <field name="arch" type="xml">
             <form string="Choose Receipt Size">
                 <field name="order_id" invisible="1"/>
+                <field name="move_id" invisible="1"/>
                 <group>
                     <field name="paper_size" widget="radio"/>
                     <field name="custom_width" string="Custom Width (mm)" invisible="paper_size != 'custom'"

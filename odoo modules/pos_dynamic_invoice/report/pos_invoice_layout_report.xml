@@ -197,6 +197,22 @@
             </t>
         </t>
 
+        <!-- CUSTOMER DUE — what they owed before this order, what this order
+             leaves unpaid, and the new running total. The whole block is
+             skipped when nothing is owed, so a settled customer's receipt is
+             unchanged. -->
+        <t t-if="block.block_type == 'customer_due'">
+            <t t-if="d.get('show_customer_due')">
+                <div style="border-top:1px solid #000; margin-top:8px; padding-top:6px;"></div>
+                <div class="totals">
+                    <div class="line"><div>Previous Due / الرصيد السابق</div><div class="value"><t t-esc="d['prev_due_f']"/></div></div>
+                    <div class="line"><div>This Invoice / هذه الفاتورة</div><div class="value"><t t-esc="d['this_due_f']"/></div></div>
+                    <div style="height:6px; border-bottom:2px solid #000; margin-top:6px;"></div>
+                    <div class="line" style="font-size:13px; font-weight:700;"><div><t t-esc="block.label_en or 'Total Due'"/> / <t t-esc="block.label_ar or 'إجمالي المستحق'"/></div><div class="value"><t t-esc="d['total_due_f']"/></div></div>
+                </div>
+            </t>
+        </t>
+
         <!-- SIGNATURES -->
         <t t-if="block.block_type == 'signatures'">
             <t t-if="d['show_customer_sig'] or d['show_shop_owner_sig']">

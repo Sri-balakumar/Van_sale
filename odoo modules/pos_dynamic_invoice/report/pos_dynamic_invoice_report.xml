@@ -193,6 +193,18 @@
                                 <div class="paymentRow"><div>Change / الباقي:</div><div><t t-esc="d['cash_change_f']"/></div></div>
                             </t>
 
+                            <!-- Customer Due — skipped entirely when the customer
+                                 owes nothing after this order. -->
+                            <t t-if="d.get('show_customer_due')">
+                                <div style="border-top:1px solid #000; margin-top:8px; padding-top:6px;"></div>
+                                <div class="totals">
+                                    <div class="line"><div class="label">Previous Due / الرصيد السابق</div><div class="value"><t t-esc="d['prev_due_f']"/></div></div>
+                                    <div class="line"><div class="label">This Invoice / هذه الفاتورة</div><div class="value"><t t-esc="d['this_due_f']"/></div></div>
+                                    <div style="height:6px; border-bottom:2px solid #000; margin-top:6px;"></div>
+                                    <div class="line" style="font-size:13px; font-weight:700;"><div class="label">Total Due / إجمالي المستحق</div><div class="value"><t t-esc="d['total_due_f']"/></div></div>
+                                </div>
+                            </t>
+
                             <t t-if="d['show_customer_sig'] or d['show_shop_owner_sig']">
                                 <div style="border-top:1px solid #000; margin-top:10px; padding-top:8px; direction:ltr;">
                                     <div style="display:flex; justify-content:space-between; gap:10px;">
@@ -317,6 +329,12 @@
                 .cm_root .foot .totals .trow { display:flex; border:1px solid #000; border-top:0; }
                 .cm_root .foot .totals .trow .k { flex:0 0 auto; white-space:nowrap; border-right:1px solid #000; padding:6px 4px; font-size:12px; font-weight:700; }
                 .cm_root .foot .totals .trow .v { flex:1; min-width:0; padding:6px 4px; text-align:right; font-size:12px; white-space:nowrap; direction:ltr; unicode-bidi:embed; }
+                /* Due rows carry longer bilingual labels than Total/Advance/Due.
+                   `.k` is normally fixed at its content width (flex:0 0 auto +
+                   nowrap), which pushes the amount outside the box. Let these
+                   labels shrink and wrap instead, so the value always stays
+                   inside the border however long the label gets. */
+                .cm_root .foot .totals .trow.duerow .k { flex:0 1 auto; min-width:0; white-space:normal; }
                 .cm_root .sign { display:flex; justify-content:space-between; align-items:flex-end; margin-top:26px; font-size:13px; }
                 .cm_root .sigcol { width:45%; text-align:center; }
                 .cm_root .sigimg { max-height:48px; max-width:100%; object-fit:contain; display:block; margin:0 auto 2px; }
@@ -428,23 +446,34 @@
                     <div class="trow"><div class="k">Total / المجموع</div><div class="v"><t t-esc="d['total_f']"/></div></div>
                     <div class="trow"><div class="k">Advance / المقدم</div><div class="v"><t t-esc="d['advance_f']"/></div></div>
                     <div class="trow"><div class="k">Due / المتبقي</div><div class="v"><t t-esc="d['due_f']"/></div></div>
+                    <!-- Carried-forward balance. Only shown when the customer
+                         still owes something once this order is accounted for. -->
+                    <t t-if="d.get('show_customer_due')">
+                        <div class="trow duerow"><div class="k">Previous / السابق</div><div class="v"><t t-esc="d['prev_due_f']"/></div></div>
+                        <div class="trow duerow"><div class="k">Balance / الإجمالي</div><div class="v"><t t-esc="d['total_due_f']"/></div></div>
+                    </t>
                 </div>
             </div>
 
-            <div class="sign">
-                <div class="sigcol">
-                    <t t-if="d['show_shop_owner_sig']">
-                        <img class="sigimg" t-att-src="'data:image/png;base64,' + d['shop_owner_signature']"/>
-                    </t>
-                    <div class="sigline">Cashier / الكاشير</div>
+            <!-- Blank ruled lines are deliberate on a POS sale (the customer
+                 signs by hand on handover), but an accounting invoice is never
+                 signed — so the whole area is skipped there. -->
+            <t t-if="d.get('show_signature_block', True)">
+                <div class="sign">
+                    <div class="sigcol">
+                        <t t-if="d['show_shop_owner_sig']">
+                            <img class="sigimg" t-att-src="'data:image/png;base64,' + d['shop_owner_signature']"/>
+                        </t>
+                        <div class="sigline">Cashier / الكاشير</div>
+                    </div>
+                    <div class="sigcol">
+                        <t t-if="d['show_customer_sig']">
+                            <img class="sigimg" t-att-src="'data:image/png;base64,' + d['customer_signature']"/>
+                        </t>
+                        <div class="sigline">Customer / العميل</div>
+                    </div>
                 </div>
-                <div class="sigcol">
-                    <t t-if="d['show_customer_sig']">
-                        <img class="sigimg" t-att-src="'data:image/png;base64,' + d['customer_signature']"/>
-                    </t>
-                    <div class="sigline">Customer / العميل</div>
-                </div>
-            </div>
+            </t>
         </div>
     </template>
 

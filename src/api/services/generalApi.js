@@ -1322,6 +1322,56 @@ export const fetchPartnerLedgerTotalsOdoo = async ({ searchText = '', partnerId 
   }
 };
 
+// A single customer's outstanding balance — what they still owe across every
+// open invoice. Powers the "Previous Due / This Invoice / Total Due" block on
+// the receipt and the Outstanding card on the POS payment screen.
+//
+// Deliberately mirrors the Partner Ledger domain above (receivable account
+// type, posted moves, active company) so this number and the Partner Ledger
+// screen can never disagree. `excludeMoveId` drops one invoice from the sum —
+// pass the current order's own invoice so "Previous Due" and "This Invoice"
+// don't double-count it (the invoice is posted before the receipt prints).
+//
+// Scoped hard to ONE partner: a customer can never be shown another's balance.
+// Fails soft to null — a balance lookup must never block a print.
+export const fetchPartnerOutstandingOdoo = async ({ partnerId, excludeMoveId = null, thisInvoiceDue = 0 } = {}) => {
+  if (!partnerId) return null;
+  try {
+    const companyId = getActiveCompanyId();
+    const domain = [
+      ['partner_id', '=', Number(partnerId)],
+      ['company_id', '=', companyId],
+      ['account_id.account_type', '=', 'asset_receivable'],
+      ['parent_state', '=', 'posted'],
+      ['reconciled', '=', false],
+    ];
+    if (excludeMoveId) domain.push(['move_id', '!=', Number(excludeMoveId)]);
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move.line',
+        method: 'search_read',
+        args: [domain],
+        kwargs: { fields: ['amount_residual'], context: { allowed_company_ids: [companyId] } },
+      },
+    }, { headers: { 'Content-Type': 'application/json' } });
+    if (resp.data?.error) {
+      console.warn('[OUTSTANDING] Odoo error:', resp.data.error?.data?.message || resp.data.error);
+      return null;
+    }
+    const lines = resp.data?.result || [];
+    const previousDue = lines.reduce((sum, l) => sum + (Number(l.amount_residual) || 0), 0);
+    const thisDue = Number(thisInvoiceDue) || 0;
+    console.log('[OUTSTANDING] partner', partnerId, '| lines', lines.length,
+      '| previousDue', previousDue, '| thisInvoiceDue', thisDue);
+    return { previousDue, thisInvoiceDue: thisDue, totalDue: previousDue + thisDue };
+  } catch (e) {
+    console.warn('fetchPartnerOutstandingOdoo exception:', e?.message || e);
+    return null;
+  }
+};
+
 // Distinct months/years that actually have data (for the Date filter's period
 // sub-options — like Odoo, which lists only used months). Derived from the
 // earliest and latest posting date under the current (non-date) filters.
@@ -4584,6 +4634,99 @@ export const fetchDynamicReceiptHtml = async ({ orderId, paperWidthMm = 80, pape
     console.warn('[DynInvoice] fetchDynamicReceiptHtml failed:', err?.message || err);
     return null;
   }
+};
+
+// Same as fetchDynamicReceiptHtml but for an Accounting invoice (account.move)
+// instead of a pos.order. The Odoo module builds the identical receipt dict for
+// both, so an invoice prints through whichever of the four templates the shop
+// configured. Returns null on any failure so the caller can fall back.
+export const fetchDynamicInvoiceHtml = async ({ moveId, paperWidthMm = 80, paperHeightMm = 0 } = {}) => {
+  if (!moveId) return null;
+  try {
+    const response = await axios.post(
+      `${getOdooUrl()}/web/dataset/call_kw`,
+      {
+        jsonrpc: '2.0',
+        method: 'call',
+        params: {
+          model: 'account.move',
+          method: 'get_dynamic_invoice_html',
+          args: [[Number(moveId)], String(paperWidthMm), String(paperHeightMm || 0)],
+          kwargs: {},
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 },
+    );
+    if (response.data && response.data.error) {
+      console.warn('[DynInvoice] get_dynamic_invoice_html error:', response.data.error?.data?.message || response.data.error);
+      return null;
+    }
+    const html = response.data?.result;
+    return (typeof html === 'string' && html.length > 0) ? html : null;
+  } catch (err) {
+    console.warn('[DynInvoice] fetchDynamicInvoiceHtml failed:', err?.message || err);
+    return null;
+  }
+};
+
+// Map an account.move (as returned by fetchInvoiceDetailOdoo) onto the params
+// generateInvoiceHtml expects, for the fallback path below.
+const _invoiceToHtmlParams = (invoice = {}, extra = {}) => {
+  const lines = Array.isArray(invoice.lines) ? invoice.lines : [];
+  const items = lines.map((l) => ({
+    id: l.id,
+    name: l.name || (Array.isArray(l.product_id) ? l.product_id[1] : '') || 'Product',
+    qty: Number(l.quantity || 0),
+    price: Number(l.price_unit || 0),
+    discount_percent: Number(l.discount || 0),
+    subtotal: Number(l.price_subtotal ?? 0),
+  }));
+  const rawSubtotal = lines.reduce(
+    (s, l) => s + (Number(l.price_unit || 0) * Number(l.quantity || 0)),
+    0,
+  );
+  const amountTotal = Number(invoice.amount_total || 0);
+  const amountTax = Number(invoice.amount_tax || 0);
+  const rolledDiscount = Math.max(0, Math.round((rawSubtotal - (amountTotal - amountTax)) * 1000) / 1000);
+  return {
+    items,
+    subtotal: rawSubtotal,
+    tax: amountTax,
+    service: 0,
+    total: amountTotal,
+    discount: rolledDiscount,
+    orderId: invoice.id,
+    orderName: invoice.name || '',
+    // Full invoice number ("INV/2026/00012") — extractOrderRef would keep only
+    // the trailing digits and drop the series.
+    docNumber: invoice.name || '',
+    paidAmount: amountTotal - Number(invoice.amount_residual || 0),
+    customer: Array.isArray(invoice.partner_id) ? { name: invoice.partner_id[1] } : null,
+    payments: Array.isArray(extra.payments) ? extra.payments : [],
+    ...extra,
+  };
+};
+
+// Resolve the printable HTML for an Accounting invoice. Mirrors
+// resolveInvoiceHtml but keyed on an account.move — do NOT route an invoice
+// through that one, it expects a pos.order id and would render an unrelated
+// POS receipt. Falls back to the app's built-in receipt when the Odoo module
+// is absent or disabled, so Print always produces something.
+export const resolveAccountInvoiceHtml = async ({ invoice, paperWidthMm = 80, paperHeightMm = 0, ...rest } = {}) => {
+  const moveId = invoice?.id;
+  try {
+    if (moveId) {
+      const enabled = await checkDynamicInvoiceInstalled();
+      try { useAuthStore.setState?.({ dynamicInvoiceEnabled: !!enabled }); } catch (_) {}
+      if (enabled) {
+        const dyn = await fetchDynamicInvoiceHtml({ moveId, paperWidthMm, paperHeightMm });
+        if (dyn) return dyn;
+      }
+    }
+  } catch (e) {
+    console.warn('[DynInvoice] resolveAccountInvoiceHtml dynamic path failed:', e?.message || e);
+  }
+  return generateInvoiceHtml(_invoiceToHtmlParams(invoice, { paperWidthMm, paperHeightMm, ...rest }));
 };
 
 // Resolve the receipt HTML for a set of invoice params. When the connected

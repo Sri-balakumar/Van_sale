@@ -15,6 +15,7 @@ const BLOCK_LABELS = {
     items_table: "Items Table",
     totals: "Totals",
     payments: "Payments",
+    customer_due: "Customer Due",
     signatures: "Signatures",
     footer: "Footer",
     barcode: "Barcode",
@@ -24,8 +25,8 @@ const BLOCK_LABELS = {
 
 const ADDABLE = [
     "custom_text", "logo", "company_name_en", "company_name_ar", "header_info",
-    "title", "meta_fields", "items_table", "totals", "payments", "signatures",
-    "footer", "barcode", "qrcode",
+    "title", "meta_fields", "items_table", "totals", "payments", "customer_due",
+    "signatures", "footer", "barcode", "qrcode",
 ];
 
 const BLOCK_FIELDS = [

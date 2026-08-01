@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder, fetchPartnerOutstandingOdoo } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef, printPageSize } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -111,6 +111,27 @@ const OrderDetailScreen = ({ navigation, route }) => {
     });
     return () => { alive = false; };
   }, []);
+
+  // Customer's outstanding balance for the receipt's Customer Due block. The
+  // order's own invoice is excluded so "Previous Due" and "This Invoice" can't
+  // double-count it. Only used on the app-rendered receipt — when
+  // pos_dynamic_invoice is enabled the server computes the same three figures.
+  const [due, setDue] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const partnerId = order?.partner?.id || null;
+    if (!partnerId) { setDue(null); return undefined; }
+    const am = order?.account_move;
+    const excludeMoveId = Array.isArray(am) ? am[0] : (am || null);
+    fetchPartnerOutstandingOdoo({
+      partnerId,
+      excludeMoveId,
+      thisInvoiceDue: Math.max(0, Number(order.amount_total || 0) - Number(order.amount_paid || 0)),
+    })
+      .then((res) => { if (alive) setDue(res); })
+      .catch(() => { if (alive) setDue(null); });
+    return () => { alive = false; };
+  }, [order?.partner?.id, order?.account_move, order?.amount_total, order?.amount_paid]);
 
   // Return-Products button state — true while the pos.order.refund RPC is in
   // flight so the button can show a spinner and prevent double-taps. The
@@ -353,6 +374,9 @@ const OrderDetailScreen = ({ navigation, route }) => {
       payments,
       shopOwnerSignature: signatures.owner,
       customerSignature: signatures.customer,
+      previousDue: due?.previousDue || 0,
+      thisInvoiceDue: due?.thisInvoiceDue || 0,
+      totalDue: due?.totalDue || 0,
     };
   };
 

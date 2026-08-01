@@ -11,7 +11,7 @@ import { useProductStore } from '@stores/product';
 import { useAuthStore } from '@stores/auth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
-import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo, resolveInvoiceHtml, fetchAppPaperSize } from '@api/services/generalApi';
+import { fetchPosOrderPaymentsOdoo, fetchPosOrderDetailOdoo, fetchPosOrderSignaturesOdoo, resolveInvoiceHtml, fetchAppPaperSize, fetchPartnerOutstandingOdoo } from '@api/services/generalApi';
 import { getOdooUrl } from '@api/config/odooConfig';
 import { generateInvoiceHtml, extractOrderRef, printPageSize } from '@utils/invoiceHtml';
 import { formatCurrency } from '@utils/currency';
@@ -109,6 +109,13 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // bump up by every other shop's order too.
   const [orderName, setOrderName] = useState('');
 
+  // Customer Due block on the printed receipt. `invoiceResolved` gates the
+  // balance fetch until we know whether this order has a linked invoice —
+  // that invoice is already posted by now, so fetching before we can exclude
+  // it would count this order's own amount twice against "This Invoice".
+  const [invoiceResolved, setInvoiceResolved] = useState(false);
+  const [due, setDue] = useState(null);
+
   // Done = wipe the in-memory cart and reset navigation to the Home tab.
   // Used both by the explicit "Done" button and the back-arrow in the hero.
   const onDone = () => {
@@ -196,7 +203,9 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // just fall back to the legacy Cash + Change rendering and a padded id.
   useEffect(() => {
     let alive = true;
-    if (!orderId) return;
+    // No order id → there is no linked invoice to exclude from the customer's
+    // balance, so let the due fetch proceed immediately rather than stall.
+    if (!orderId) { setInvoiceResolved(true); return; }
     Promise.all([
       fetchPosOrderPaymentsOdoo(orderId),
       fetchPosOrderDetailOdoo(orderId),
@@ -224,6 +233,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
         if (Array.isArray(am) && am[0]) {
           setLinkedInvoiceId(Number(am[0]));
           setLinkedInvoiceName(String(am[1] || `Invoice-${am[0]}`));
+          setInvoiceResolved(true);
         } else {
           // Fallback — when linkInvoiceToPosOrderOdoo's write didn't
           // land (or for older orders predating the link fix), Odoo
@@ -252,13 +262,34 @@ const CreateInvoicePreview = ({ navigation, route }) => {
               }
             } catch (e) {
               console.warn('[Receipt] invoice_origin fallback error:', e?.message || e);
+            } finally {
+              if (alive) setInvoiceResolved(true);
             }
           })();
         }
       })
-      .catch(() => { /* keep defaults for fallback */ });
+      .catch(() => { setInvoiceResolved(true); /* keep defaults for fallback */ });
     return () => { alive = false; };
   }, [orderId]);
+
+  // Customer's outstanding balance for the receipt's Customer Due block.
+  // Only used when the app renders its own receipt — when pos_dynamic_invoice
+  // is enabled the server computes the same three figures itself and
+  // resolveInvoiceHtml ignores everything passed here.
+  const partnerId = customer?.id || customer?._id || null;
+  const thisInvoiceDue = Math.max(0, grandTotal - paidAmount);
+  useEffect(() => {
+    let alive = true;
+    if (!partnerId || !invoiceResolved) return undefined;
+    fetchPartnerOutstandingOdoo({
+      partnerId,
+      excludeMoveId: linkedInvoiceId,
+      thisInvoiceDue,
+    })
+      .then((res) => { if (alive) setDue(res); })
+      .catch(() => { if (alive) setDue(null); });
+    return () => { alive = false; };
+  }, [partnerId, invoiceResolved, linkedInvoiceId, thisInvoiceDue]);
 
   const isSplit = payments.length > 1;
 
@@ -334,7 +365,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // 1. Print Preview — show the receipt HTML in an in-app WebView modal.
   const runPreview = async (paperWidthMm, paperHeightMm = 0) => {
     try {
-      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer, previousDue: due?.previousDue || 0, thisInvoiceDue: due?.thisInvoiceDue || 0, totalDue: due?.totalDue || 0 });
       setPreviewHtml(html);
       setPreviewVisible(true);
     } catch (err) {
@@ -353,7 +384,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
     try {
       const filename = `Invoice-${orderNumber}.pdf`;
       console.log(`[Download] start — order=${orderId} size=${paperWidthMm}mm`);
-      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer, previousDue: due?.previousDue || 0, thisInvoiceDue: due?.thisInvoiceDue || 0, totalDue: due?.totalDue || 0 });
       console.log(`[Download] receipt HTML ready — ${html?.length || 0} chars`);
       // Exact page size (points) so the PDF page == the physical roll → printer
       // prints at 100%, no downscaling that smears thermal text.
@@ -409,7 +440,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   const runPrint = async (paperWidthMm, paperHeightMm = 0) => {
     setPrinting(true);
     try {
-      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer });
+      const html = await resolveInvoiceHtml({ items, subtotal, service, total, discount, tax, orderId, orderName, paidAmount, customer, payments, paperWidthMm, paperHeightMm, companyProfile, cashierName, shopOwnerSignature: signatures.owner, customerSignature: signatures.customer, previousDue: due?.previousDue || 0, thisInvoiceDue: due?.thisInvoiceDue || 0, totalDue: due?.totalDue || 0 });
       // Exact page size (points) so the printer prints at 100% with no scaling.
       await Print.printAsync({ html, ...printPageSize(paperWidthMm, paperHeightMm) });
     } catch (err) {

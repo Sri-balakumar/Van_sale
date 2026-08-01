@@ -11,6 +11,7 @@ import {
   createInvoiceOdoo, linkInvoiceToPosOrderOdoo,
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
+  fetchPartnerOutstandingOdoo,
   updatePosOrderSignaturesOdoo,
   submitPosOrderToOdoo,
   getCurrentDeviceLocation,
@@ -191,6 +192,32 @@ const POSPayment = ({ navigation, route }) => {
       })
       .catch(() => {
         if (alive) setIdProof({ front: null, back: null, loaded: true });
+      });
+    return () => { alive = false; };
+  }, [customer?.id, customer?._id]);
+
+  // Selected customer's outstanding balance, so the salesman can ask for the
+  // old money BEFORE collecting for this order. No order exists yet at this
+  // point, so the whole open receivable IS the previous due — nothing to
+  // exclude. Re-fetches when the customer is swapped mid-sale via
+  // openCustomerSelector. `loaded` distinguishes "still fetching" from
+  // "definitely owes nothing", same convention as idProof above.
+  const [outstanding, setOutstanding] = useState({ amount: 0, loaded: false });
+  useEffect(() => {
+    let alive = true;
+    const partnerId = customer?.id || customer?._id;
+    if (!partnerId) {
+      setOutstanding({ amount: 0, loaded: false });
+      return undefined;
+    }
+    setOutstanding({ amount: 0, loaded: false });
+    fetchPartnerOutstandingOdoo({ partnerId })
+      .then((res) => {
+        if (!alive) return;
+        setOutstanding({ amount: Number(res?.previousDue) || 0, loaded: true });
+      })
+      .catch(() => {
+        if (alive) setOutstanding({ amount: 0, loaded: true });
       });
     return () => { alive = false; };
   }, [customer?.id, customer?._id]);
@@ -1490,6 +1517,18 @@ const POSPayment = ({ navigation, route }) => {
           contentContainerStyle={{ paddingBottom: 110 }}
           showsVerticalScrollIndicator={false}
         >
+          {/* Outstanding balance for the selected customer — sits directly
+              under the total so the salesman sees the old due BEFORE picking a
+              payment mode. Hidden while loading, with no customer, and when
+              they owe nothing, so a settled sale looks exactly as before. */}
+          {customer && outstanding.loaded && outstanding.amount > 0 ? (
+            <View style={styles.dueCard}>
+              <MaterialIcons name="account-balance-wallet" size={18} color="#9A3412" />
+              <Text style={styles.dueLabel}>Previous Due</Text>
+              <Text style={styles.dueValue}>{displayNum(outstanding.amount)}</Text>
+            </View>
+          ) : null}
+
           {/* Payment Mode segmented control */}
           <View style={styles.modeRow}>
             {renderModeCard('cash', 'Cash', 'payments', async () => {
@@ -3028,6 +3067,34 @@ letterSpacing: 0.4,
     color: '#fff', fontSize: 14,
     fontFamily: FONT_FAMILY.urbanistBold,
     letterSpacing: 0.3, marginLeft: 4,
+  },
+
+  // Previous-due banner — same amber "pay attention" treatment as the split
+  // summary card below, laid out as one row: icon · label · amount.
+  dueCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 14,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1.5,
+    borderColor: '#FED7AA',
+  },
+  dueLabel: {
+    flex: 1,
+    fontSize: 11,
+    color: '#9A3412',
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+    marginLeft: 8,
+  },
+  dueValue: {
+    fontSize: 15,
+    color: '#9A3412',
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
 
   // Split (partial) payment styles ───────────────────────────────────
