@@ -12,6 +12,59 @@ build.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-07
+
+### Added
+- Invoice Settings rebuilt as a three-screen hub per company: **General
+  Settings**, **Receipt Paper Sizes** and **Invoice Layouts**.
+- **Invoice Template** picker (Standard / Dynamic / Cash Memo / Custom
+  Layout) replaces the old "Use Dynamic Invoice on App" master switch,
+  with a server-rendered Preview against the most recent order.
+- **Cash Memo** receipt: a bilingual English/Arabic Oman-style invoice
+  with C.R. number, GSM, Sultanate line and VAT number (each with its own
+  show/hide switch), an enlarged logo, and a cashier/customer signature
+  row.
+- **Receipt Paper Sizes** admin: sizes entered in inches with the mm
+  width derived automatically, height 0 for a continuous roll,
+  reorder/edit/delete, plus a locked per-company "Custom" entry. Replaces
+  the fixed 2"/3"/3.5"/4" preset list.
+- **Invoice Layouts** admin and a landscape drag-and-drop visual editor
+  (Design / Options / Live Preview) with per-paper-size block layouts,
+  undo/redo and auto-save.
+- **Use Default Receipt Size**: when set, Preview / Download / Print skip
+  the size prompt in both the app and the Odoo preview.
+- **Customer due on receipts**: a Previous Due card on the POS payment
+  screen, and Previous Due / This Invoice / Total Due rows on every
+  receipt template when the customer still owes money.
+- **Print PDF** on accounting invoices — renders through the shop's own
+  invoice template and paper size, alongside the unchanged Download PDF.
+- Products: unit-of-measure management (Add Unit, reference units),
+  multi-category assignment, a Track Inventory toggle, Dozen Display
+  (pieces per dozen, on-hand in dozens, "Dozen + Pcs" readout), delete
+  with an archive fallback, and a Show Archived / Restore flow.
+- Partner Ledger filters: posting status, review, reconciliation,
+  journal, account type and date/invoice-date periods, with removable
+  chips and a pinned grand-total row.
+- In-app **User Manual** tile plus a HELP card on Profile, with a
+  per-device "Show to users" toggle for administrators.
+
+### Changed
+- All receipt sizes now print at 100% on a single continuous page instead
+  of being scaled or split.
+- Customer returns support partial quantities, with tax locked to what
+  was originally charged and scaled to the quantity returned; refund
+  orders carry a REFUND badge and a link back to the original sale.
+- Quick Return shows Purchased / Already Returned / Max Returnable per
+  line with clamping validation, and a "Return all" shortcut.
+- Profile avatar is now the user's initial rather than a generic image.
+
+### Fixed
+- New products no longer fail to create on databases without a default
+  internal category.
+- Product save now enables only when something has actually changed, and
+  a category created inline appears immediately.
+- Partner Ledger value display and filtering corrected.
+
 ## [1.3.0] - 2026-07-02
 
 ### Added

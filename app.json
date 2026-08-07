@@ -2,7 +2,7 @@
   "expo": {
     "name": "NEXGENN VAN-SALE",
     "slug": "van-sale",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,7 +16,7 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -39,7 +39,7 @@
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "package": "com.alphalize.goldenspoon",
-      "versionCode": 2,
+      "versionCode": 3,
       "usesCleartextTraffic": true
     },
     "plugins": [
@@ -57,10 +57,10 @@
         }
       ]
     ],
-    "owner": "vacihe",
+    "owner": "setihel",
     "extra": {
       "eas": {
-        "projectId": "a6507773-12b0-4dae-9b00-8b52e6097b4e"
+        "projectId": "8cc3bb9b-7ed7-46b3-902e-6d2b707345a9"
       }
     }
   }
