@@ -1,289 +1,148 @@
-NEX GENN POS Mobile Application
+# NEXGENN Van Sale
 
-Detailed README & Technical Overview
+> A van-sales POS on Odoo — sell off the vehicle, print a branded receipt, buy stock back in,
+> and keep the books straight, all from the phone in the driver's hand.
 
-1. Introduction
+NEXGENN Van Sale is an [Expo](https://expo.dev) React Native app for a mobile seller. A driver
+loads up, works a round, and sells from the van: pick products, take payment, print a receipt with
+the company's own layout, and let the order carry the GPS location it was raised at. The same app
+handles purchases, returns, expenses, stock and the accounting behind them.
 
-NEX GENN POS Mobile Application is a React Native–based Point of Sale (POS) system designed to work seamlessly with an Odoo backend.
-The application enables retail stores, restaurants, and showrooms to manage orders, products, and payments using a mobile device.
+Everything it does is backed by custom Odoo 19 modules, all of which ship in
+[odoo modules/](odoo%20modules/) beside the app.
 
-The app is built with modular architecture, clean separation of concerns, and scalable components, making it suitable for future enhancements.
+## Features
 
-2. Key Objectives
+**Selling** — categories, product browsing, cart, a vending cart, order history with detail, and
+whole-order discounts.
 
-Provide a fast and user-friendly POS interface
+**Receipts and invoices** — an Invoice Settings hub per company covering general settings, receipt
+paper sizes and invoice layouts, plus a template picker (Standard, Dynamic, Cash Memo or a custom
+layout) with a server-rendered preview against the most recent order. The **Cash Memo** is a
+bilingual English/Arabic Oman-style invoice with C.R. number, GSM, Sultanate line and VAT number,
+each independently switchable, and cashier and customer signatures.
 
-Integrate securely with Odoo POS backend
+**Purchasing** — Easy Purchase with form, list, detail, barcode printing and payment methods; and
+Quick Purchase Return for POS-style returns.
 
-Support multiple payment methods
+**Stock** — stock list and detail, product creation, and on-hand quantities shown as
+"X Dozen Y Pcs" where that is how the trade counts.
 
-Enable category-based product browsing
+**Accounting** — invoices list and detail, journal entries, partner ledger, and customer-due
+figures on receipts.
 
-Ensure stable performance on low-end devices
+**Money and reporting** — expenses with payment methods, sales reports, orders analysis, a
+dashboard and a KPI dashboard.
 
-3. Technology Stack
-Frontend
+**Administration** — per-user feature gating, user management, home-screen banners, invoice layout
+editor, and an in-app user manual served from Odoo.
 
-React Native
+**Devices** — pairing by QR after the device has been pre-registered by MAC address in Odoo.
 
-Expo
+**Back-office options** — the Home screen also carries Attendance, Audit, Inventory, Purchases,
+CRM, Visits and Visit Plans, Market Study, Task Manager, Box Inspection and Vehicle Tracking.
 
-React Navigation
+## Tech stack
 
-Gorhom Bottom Sheet
+| | |
+|---|---|
+| Framework | Expo SDK ~50, React Native 0.73.6 |
+| Navigation | React Navigation 6 |
+| State | zustand — stores for `auth`, `box`, `currency`, `network`, `product` |
+| Styling | NativeWind (Tailwind for React Native) |
+| Networking | axios over Odoo JSON-RPC — [src/api/services/](src/api/services/) |
+| Device | expo-camera, expo-barcode-scanner, expo-location, expo-print, react-native-maps |
 
-React Native Snap Carousel
+## Odoo backend
 
-Backend
+Eleven modules, all in [odoo modules/](odoo%20modules/) — note the space in the folder name.
 
-Odoo (POS module)
+| Module | Purpose |
+|---|---|
+| `pos_dynamic_invoice` | Editable, branded POS invoice — logo, company name, GST, footer. v19.0.30.0.0 |
+| `pos_order_location` | Tag every POS order with the device GPS coordinates and place name captured at receipt time |
+| `pos_total_discount` | Apply discount on total order amount from the POS navbar |
+| `product_dozen_display` | Show on-hand stock as "X Dozen Y Pcs" and auto-create the Dozens unit |
+| `easy_purchase_apps` | Easy Purchase — one-click purchase entry |
+| `quick_purchase_return_apps` | POS-style purchase return for small businesses |
+| `user_privilege_manager_apps` | Granular user privileges + app feature gating |
+| `hr_expense_payment_method` | Adds a Payment Method field to Expenses |
+| `app_banner` | Manage home-screen carousel banners for the mobile app |
+| `app_user_manual` | Store the mobile app user-manual PDF in the database |
+| `device_login_config` | Pre-register devices by MAC address; only approved devices can configure the app |
 
-JSON-RPC / REST APIs
+> **The three `_apps` modules are parallel builds.** `easy_purchase_apps`,
+> `quick_purchase_return_apps` and `user_privilege_manager_apps` use `.app`-suffixed models so they
+> install *alongside* their non-app counterparts rather than replacing them. On a server that
+> already runs `easy_purchase`, install the `_apps` variant — do not swap one for the other.
 
-Supporting Libraries
+## Getting started
 
-Custom React Hooks
+**Prerequisites** — Node.js 18+, npm or yarn, and a reachable Odoo 19 server with the modules
+above installed.
 
-Toast notifications
-
-Overlay loaders
-
-4. Folder Structure (Detailed)
-src/
-├── api/
-│   ├── services/
-│   │   └── generalApi.js          # Category & product APIs
-│   └── details/
-│       └── detailApi.js           # Barcode & product detail APIs
-│
-├── assets/
-│   ├── images/
-│   │   ├── Home/
-│   │   │   └── Banner/            # Home screen banners
-│   │   └── logo/
-│
-├── components/
-│   ├── Home/
-│   │   ├── CarouselPagination.js  # Banner carousel with click handling
-│   │   ├── Header.js              # App header
-│   │   ├── ImageContainer.js      # Action buttons (Take Orders)
-│   │   └── ListHeader.js          # Section headers
-│   ├── Categories/
-│   │   └── CategoryList.js
-│   ├── Loader/
-│   └── Toast/
-│
-├── screens/
-│   ├── HomeScreen.js              # Main landing screen
-│   ├── POSRegister.js             # POS register screen
-│   ├── Products.js                # Product listing screen
-│   ├── ProductDetail.js           # Product detail view
-│
-├── hooks/
-│   ├── useDataFetching.js         # API data fetching hook
-│   └── useLoader.js               # Global loading state
-│
-├── utils/
-│   └── formatters.js              # Grid & data formatting
-│
-├── constants/
-│   └── theme.js                   # Colors & UI constants
-
-5. Application Flow (End-to-End)
-5.1 Login Flow
-
-App opens with Login screen
-
-User enters:
-
-Server URL
-
-Username
-
-Password
-
-App authenticates against Odoo
-
-On success → navigates to Home Screen
-
-5.2 Home Screen Flow
-
-The Home Screen is the central navigation hub.
-
-Components:
-
-Header
-
-Banner Carousel
-
-“Take Orders” button
-
-Category listing (Bottom Sheet)
-
-Special Behavior:
-
-Desktop POS Machine banner is clickable
-
-Click action is controlled from HomeScreen
-
-Touch handling is implemented in CarouselPagination
-
-5.3 Banner Click Architecture (Important Design)
-
-Why this design is used:
-
-UI logic stays inside component
-
-Navigation logic stays in screen
-
-Easy to change behavior later
-
-Flow:
-User taps banner
-↓
-CarouselPagination detects press
-↓
-Calls onBannerPress()
-↓
-HomeScreen decides action (navigate / open website)
-
-5.4 Category & Product Flow
-
-Categories fetched from Odoo
-
-Categories named Food and Drinks are filtered out
-
-Duplicate categories are removed
-
-User selects a category
-
-Products are fetched using category ID
-
-User navigates to Product list
-
-5.5 Product Detail & Barcode Scan
-
-Barcode scanning supported
-
-Barcode is sent to Odoo API
-
-Matching product details are returned
-
-If not found → user is notified
-
-5.6 Order & Payment Flow
-
-User adds products
-
-Quantity and discount applied
-
-Order placed
-
-Payment options:
-
-Cash
-
-Card
-
-Customer Account
-
-Invoice generated after payment
-
-6. Back Button Handling (Android)
-
-Single back press → Toast message
-
-Second back press within 2 seconds → Exit app
-
-This avoids accidental app closure.
-
-7. Performance Considerations
-
-Lazy loading of categories
-
-Pagination for product lists
-
-Bottom Sheet used to optimize screen space
-
-Overlay loader prevents multiple API calls
-
-8. Installation & Setup
-Prerequisites
-
-Node.js (v16+ recommended)
-
-Expo CLI
-
-Android Studio / Emulator or physical device
-
-Running Odoo backend with POS enabled
-
-Install Dependencies
+```bash
 npm install
-# or
-yarn install
+npm start
+```
 
-Run Application
-npx expo start
+A device pairs by scanning a QR code, having first been registered by MAC address in Odoo. Login
+credentials and the session are persisted, so a driver who never logs out comes back to a signed-in
+app — see [AUTOFILL_FIX.md](AUTOFILL_FIX.md) for how that was made to work.
 
-Clear Cache (Recommended)
-npx expo start -c
+`app.json` is generated rather than edited by hand:
 
-9. Configuration Notes
+```bash
+npm run generate-app-json
+```
 
-Server URL must be reachable from device
+## Building
 
-Odoo POS APIs must be enabled
+Profiles are in [eas.json](eas.json):
 
-Correct CORS / authentication settings required
+```bash
+eas build -p android --profile preview      # APK
+eas build -p android --profile preview4     # internal distribution
+eas build -p android --profile production
+```
 
-10. Error Handling
+Current release: **v1.4.0**, Android package `com.alphalize.goldenspoon`.
 
-API errors are shown via toast messages
+**When bumping a version, edit both `package.json` and `app.json`** so they stay in sync, and bump
+`expo.android.versionCode` (integer) and `expo.ios.buildNumber` (string) for every store-bound
+build. [CHANGELOG.md](CHANGELOG.md) carries the same rule and the release history.
 
-Network issues are handled gracefully
+## Project structure
 
-Empty product results handled safely
+```
+src/
+  screens/        Splash, Auth, DeviceSetup (setup + QR scanner), Home (Options +
+                  Customer/Services Sections), Categories, Products, Cart, VendingCart,
+                  MyOrders, OrdersAnalysis, SalesReport, Dashboard, KPIDashboard,
+                  Stock, EasyPurchase, QuickPurchaseReturn, Expenses, Accounting
+                  (invoices, journal entries, partner ledger), Admin (app features,
+                  invoice settings hub, layouts editor), AppBanners, Users,
+                  UserManual, Profile
+  api/            config/, endpoints/, services/ (generalApi, deviceApi, easyPurchaseApi,
+                  quickPurchaseReturnApi, currencyApi, customerCache, localBanners), utils/
+  stores/         zustand: auth, box, currency, network, product
+  components/ navigation/ hooks/ utils/ constants/
+plugins/          android-cleartext-traffic.js
+scripts/          seed_customer_due_demo.py
+odoo modules/     the eleven Odoo modules
+documents/        user guides, the manual build pipeline, and screenshots
+assets_for_manual/
+```
 
-11. Known Limitations
+## Documentation
 
-Offline mode not yet supported
-
-Single POS session per device
-
-Limited reporting inside mobile app
-
-12. Future Enhancements
-
-Offline POS support
-
-Role-based access control
-
-Sales analytics dashboard
-
-Multi-branch support
-
-Printer integration
-
-13. Security Notes
-
-Credentials are not stored in plain text
-
-API access controlled by Odoo permissions
-
-Sensitive actions handled server-side
-
-14. License
-
-This application is proprietary software developed for NEX GENN POS.
-Unauthorized distribution or modification is not permitted.
-
-15. Support & Maintenance
-
-For support:
-
-Verify Odoo server availability
-
-Check API credentials
-
-Review Metro logs for errors
+- [CHANGELOG.md](CHANGELOG.md) — release history in Keep a Changelog format, with the version-bump
+  rules.
+- [documents/App documents/](documents/App%20documents/) — `Van_Sale_User_Guide` in
+  `Nexgenn_unblured` and `Common_blurred` variants, plus the Golden Spoon Vegetables manual.
+- [documents/manual/](documents/manual/) — the build pipeline (`build_manual.py`,
+  `build-manual.ps1`) and the screenshots the guide is assembled from.
+- [AUTOFILL_FIX.md](AUTOFILL_FIX.md) — why credentials and sessions did not persist across
+  restarts, and what fixed it.
+- [docs/legacy-README.md](docs/legacy-README.md) — the previous README, an unformatted plain-text
+  overview written when the app was described as "NEX GENN POS". Kept for reference.
