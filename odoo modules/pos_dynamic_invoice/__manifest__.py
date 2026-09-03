@@ -1,6 +1,6 @@
 {
     'name': 'POS Dynamic Invoice',
-    'version': '19.0.30.0.0',
+    'version': '19.0.31.0.0',
     'category': 'Point of Sale',
     'summary': 'Editable, branded POS invoice (logo, company name, GST, footer, '
                'terms) rendered server-side at all 6 receipt sizes. When this '

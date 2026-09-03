@@ -1,24 +1,40 @@
 #!/usr/bin/env python3
-"""Seed demo data for testing the Customer Due block and the invoice Print button.
+"""Seed demo grocery-shop customers who owe money, for testing Customer Due.
 
-Creates one demo customer and three posted customer invoices with different
-payment states, so the receipt's "Previous Due / This Invoice / Total Due"
-block and the POS Payment "Previous Due" card have something real to show:
+Both places the due is shown are hidden when the balance is zero, so on a clean
+database there is nothing to look at. This creates several customers each
+carrying an outstanding balance, built from posted, unpaid customer invoices:
 
-    Demo - Ahmed Trading
-      unpaid invoice      120.000   -> residual 120.000
-      half-paid invoice    80.000   -> residual  40.000
-      fully-paid invoice   55.000   -> residual   0.000
-                                       Previous Due = 160.000
+    Al Noor Grocery              45.500 + 32.000  ->   77.500
+    Salim Mini Mart                     128.750   ->  128.750
+    Green Valley Supermarket     15.250 + 60.000  ->   75.250
+    Hilal Foodstuff Trading             210.000   ->  210.000
+    Muscat Corner Store                   8.500   ->    8.500
 
-Safe to re-run: it looks records up by name and reuses them instead of piling
+Two customers carry more than one invoice, so the printed figure has to be a
+real sum rather than a single line read back. Muscat Corner Store's small
+balance is there to check the block still reads sensibly at low values.
+
+Dues come from UNPAID invoices rather than partly-paid ones on purpose: Odoo 19
+posts an account.payment to `in_process` with no journal entry, so there is
+nothing to reconcile against over RPC. An unpaid invoice gives the same
+outstanding balance with none of that fragility, and matches the shape of a
+real credit sale anyway.
+
+Safe to re-run: records are looked up by name/ref and reused instead of piling
 up duplicates. Nothing is added to the Odoo modules themselves, so no client
 install ever receives this data.
+
+NOTE — seeding alone does NOT make the app's Orders History card appear. That
+card reads a snapshot written by pos.order.capture_customer_due(), which only
+runs when the APP completes a sale. What is seeded here is the customer's
+PREVIOUS due; to see the card, seed first, then make a sale in the app to one
+of these customers and open that order in Orders History.
 
 Usage
 -----
     py scripts/seed_customer_due_demo.py \
-        --url http://localhost:8069 --db mydb --user admin --password admin
+        --url http://localhost:8069 --db grocery_shop --user admin --password admin
 
     # remove everything it created
     py scripts/seed_customer_due_demo.py ... --cleanup
@@ -30,21 +46,61 @@ import json
 import sys
 import urllib.request
 
-DEMO_CUSTOMER = 'Demo - Ahmed Trading'
-# (reference, amount). All left unpaid: Odoo 19 posts an account.payment to
-# `in_process` with no journal entry, so there is nothing to reconcile against
-# over RPC. Unpaid invoices give the same outstanding balance with none of that
-# fragility — and match the real shape of a credit sale anyway.
-DEMO_INVOICES = [
-    ('DEMO-DUE-1', 120.0),
-    ('DEMO-DUE-2', 40.0),
+# Each entry: the customer, and the invoice amounts that make up their debt.
+# `slug` namespaces the invoice refs so one customer's cleanup can never touch
+# another's — or, worse, a real invoice that happens to share a ref.
+DEMO_CUSTOMERS = [
+    {'name': 'Demo - Al Noor Grocery', 'slug': 'ALNOOR',
+     'city': 'Muscat', 'street': 'Al Khuwair Street 12',
+     'invoices': [45.500, 32.000]},
+    {'name': 'Demo - Salim Mini Mart', 'slug': 'SALIM',
+     'city': 'Seeb', 'street': 'Mabela South 4',
+     'invoices': [128.750]},
+    {'name': 'Demo - Green Valley Supermarket', 'slug': 'GREENVALLEY',
+     'city': 'Muscat', 'street': 'Ruwi High Street 88',
+     'invoices': [15.250, 60.000]},
+    {'name': 'Demo - Hilal Foodstuff Trading', 'slug': 'HILAL',
+     'city': 'Sohar', 'street': 'Falaj Al Qabail 7',
+     'invoices': [210.000]},
+    {'name': 'Demo - Muscat Corner Store', 'slug': 'CORNER',
+     'city': 'Muscat', 'street': 'Wadi Kabir 3',
+     'invoices': [8.500]},
 ]
 
-# POS-side demo: one part-credit sale. `note` tags the order so the script can
+# The POS demo order needs an open session and a Customer Account payment
+# method, so it is attached to ONE customer rather than all five — it degrades
+# gracefully to a skip when the database can't support it.
+POS_CUSTOMER_SLUG = 'ALNOOR'
+
+# POS-side demo: one credit sale, tagged via `pos_reference` so the script can
 # find (and clean up) its own record without relying on the generated name.
-POS_ORDER_TAG = 'DEMO-DUE-POS'
-POS_INVOICE_REF = 'DEMO-DUE-POS'
+#
+# The tag carries the customer's slug. The earlier version used a bare
+# 'DEMO-DUE-POS', and `create_pos_order` treats any order with that reference as
+# "already seeded" WITHOUT checking whose it is — so an order left over from a
+# run against a different demo customer was silently reused, and the summary
+# then quoted that customer's balance instead of this one's.
+POS_ORDER_TAG = 'DEMO-DUE-POS-%s' % POS_CUSTOMER_SLUG
+POS_INVOICE_REF = 'DEMO-DUE-POS-%s' % POS_CUSTOMER_SLUG
 POS_TOTAL = 25.0
+
+# Tags and customers written by earlier versions of this script. Kept only so
+# `--cleanup` can still sweep them up; nothing new is ever created under these.
+LEGACY_POS_TAG = 'DEMO-DUE-POS'
+LEGACY_INVOICE_REFS = ['DEMO-DUE-1', 'DEMO-DUE-2', 'DEMO-DUE-POS']
+LEGACY_CUSTOMERS = ['Demo - Ahmed Trading']
+
+
+def invoice_refs(cust):
+    """The invoice refs belonging to one demo customer.
+
+    Namespaced by slug so `--cleanup` can only ever match records this script
+    created. The original single-customer version keyed on a bare 'DEMO-DUE-n'
+    and searched on `ref` alone, which on a real shop database could collide
+    with — and then delete — a genuine invoice.
+    """
+    return ['DEMO-DUE-%s-%d' % (cust['slug'], i + 1)
+            for i in range(len(cust['invoices']))]
 
 
 class Odoo:
@@ -84,19 +140,32 @@ class Odoo:
         })
 
 
-def find_or_create_customer(odoo):
+def find_or_create_customer(odoo, cust):
+    """Look up one demo customer by name, creating it if absent.
+
+    Searches with `active_test: False` because `cleanup()` ARCHIVES a partner it
+    cannot delete (one still referenced by a posted invoice). Without this the
+    default active-only search misses the archived record and a re-run silently
+    creates a duplicate customer every time.
+    """
     found = odoo.kw('res.partner', 'search_read',
-                    [[['name', '=', DEMO_CUSTOMER]]], {'fields': ['id'], 'limit': 1})
+                    [[['name', '=', cust['name']]]],
+                    {'fields': ['id', 'active'], 'limit': 1,
+                     'context': {'active_test': False}})
     if found:
-        print('  customer exists -> id %s' % found[0]['id'])
+        if not found[0].get('active'):
+            odoo.kw('res.partner', 'write', [[found[0]['id']], {'active': True}])
+            print('  %s was archived -> restored (id %s)' % (cust['name'], found[0]['id']))
+        else:
+            print('  %s exists -> id %s' % (cust['name'], found[0]['id']))
         return found[0]['id']
     partner_id = odoo.kw('res.partner', 'create', [{
-        'name': DEMO_CUSTOMER,
+        'name': cust['name'],
         'customer_rank': 1,
-        'street': 'Demo Street 1',
-        'city': 'Muscat',
+        'street': cust['street'],
+        'city': cust['city'],
     }])
-    print('  customer created -> id %s' % partner_id)
+    print('  %s created -> id %s' % (cust['name'], partner_id))
     return partner_id
 
 
@@ -141,8 +210,14 @@ def bank_journal_id(odoo):
 
 
 def create_invoice(odoo, partner_id, journal, ref, amount, company_id):
+    # Scoped by move_type AND company, not `ref` alone: a bare ref match can
+    # hit a vendor bill or a record in another company and treat it as "already
+    # seeded" — and `cleanup()` would then delete it.
     existing = odoo.kw('account.move', 'search_read',
-                       [[['ref', '=', ref]]], {'fields': ['id', 'amount_residual'], 'limit': 1})
+                       [[['ref', '=', ref],
+                         ['move_type', '=', 'out_invoice'],
+                         ['company_id', '=', company_id]]],
+                       {'fields': ['id', 'amount_residual'], 'limit': 1})
     if existing:
         print('  %s exists -> id %s (residual %s)'
               % (ref, existing[0]['id'], existing[0]['amount_residual']))
@@ -252,36 +327,63 @@ def cleanup(odoo):
     # POS order first — it references the invoice, so the move cannot be
     # unlinked while the order still points at it.
     orders = odoo.kw('pos.order', 'search_read',
-                     [[['pos_reference', '=', POS_ORDER_TAG]]], {'fields': ['id']})
+                     [[['pos_reference', 'in', [POS_ORDER_TAG, LEGACY_POS_TAG]]]],
+                     {'fields': ['id', 'name']})
     if orders:
         ids = [o['id'] for o in orders]
-        odoo.kw('pos.payment', 'unlink',
-                [[p['id'] for p in odoo.kw('pos.payment', 'search_read',
-                                           [[['pos_order_id', 'in', ids]]], {'fields': ['id']})]])
-        odoo.kw('pos.order', 'write', [ids, {'state': 'draft', 'account_move': False}])
-        odoo.kw('pos.order', 'unlink', [ids])
-        print('  removed %d demo POS order(s)' % len(ids))
+        payments = odoo.kw('pos.payment', 'search_read',
+                           [[['pos_order_id', 'in', ids]]], {'fields': ['id']})
+        if payments:
+            odoo.kw('pos.payment', 'unlink', [[p['id'] for p in payments]])
+        # Detach the invoice BEFORE trying to delete anything, so the move can
+        # be unlinked further down. Odoo 19 permits writing `account_move` on a
+        # paid order even though it refuses any state change — the guard is on
+        # the state field, not the record as a whole.
+        odoo.kw('pos.order', 'write', [ids, {'account_move': False}])
+        try:
+            odoo.kw('pos.order', 'unlink', [ids])
+            print('  removed %d demo POS order(s)' % len(ids))
+        except SystemExit:
+            # Odoo 19 refuses BOTH state=draft/cancel ("This order has already
+            # been paid") and deletion ("In order to delete a sale, it must be
+            # new or cancelled") once an order is paid. Nothing over RPC gets
+            # past that, so report it instead of aborting the whole cleanup —
+            # the order is inert now its payments and invoice link are gone.
+            print('  %d paid demo POS order(s) cannot be deleted on Odoo 19:' % len(ids))
+            print('    %s' % ', '.join(o['name'] for o in orders))
+            print('    payments and invoice link removed; delete from the POS backend if needed.')
 
-    refs = [ref for ref, _amount in DEMO_INVOICES] + [POS_INVOICE_REF]
+    refs = [POS_INVOICE_REF] + LEGACY_INVOICE_REFS
+    for cust in DEMO_CUSTOMERS:
+        refs.extend(invoice_refs(cust))
+    # Constrained to customer invoices this script could have created. `ref`
+    # alone would also match a vendor bill or another company's move, and the
+    # button_draft + unlink below would then destroy it.
     moves = odoo.kw('account.move', 'search_read',
-                    [[['ref', 'in', refs]]], {'fields': ['id', 'ref']})
+                    [[['ref', 'in', refs], ['move_type', '=', 'out_invoice']]],
+                    {'fields': ['id', 'ref']})
     if moves:
         ids = [m['id'] for m in moves]
         # Payments must be unreconciled + a posted move reset to draft first.
         odoo.kw('account.move', 'button_draft', [ids])
         odoo.kw('account.move', 'unlink', [ids])
         print('  removed %d demo invoice(s)' % len(ids))
-    partners = odoo.kw('res.partner', 'search_read',
-                       [[['name', '=', DEMO_CUSTOMER]]], {'fields': ['id'], 'limit': 1})
-    if partners:
+
+    for name in [c['name'] for c in DEMO_CUSTOMERS] + LEGACY_CUSTOMERS:
+        partners = odoo.kw('res.partner', 'search_read',
+                           [[['name', '=', name]]],
+                           {'fields': ['id'], 'limit': 1,
+                            'context': {'active_test': False}})
+        if not partners:
+            continue
         try:
             odoo.kw('res.partner', 'unlink', [[partners[0]['id']]])
-            print('  removed demo customer')
+            print('  removed %s' % name)
         except SystemExit:
             # Odoo refuses to delete a partner still referenced by anything —
             # archive instead so it stops appearing in the customer list.
             odoo.kw('res.partner', 'write', [[partners[0]['id']], {'active': False}])
-            print('  demo customer still referenced — archived instead')
+            print('  %s still referenced — archived instead' % name)
 
 
 def main():
@@ -304,43 +406,63 @@ def main():
         return
 
     print('Seeding Customer Due demo data...')
-    partner_id = find_or_create_customer(odoo)
+    # Resolved once, not per customer: every demo invoice must land in the SAME
+    # company, because the due is scoped by company — a customer with invoices
+    # spread across two companies reads as owing less than they do.
     company_id = resolve_company(odoo)
     journal = sale_journal_id(odoo, company_id)
-    for ref, amount in DEMO_INVOICES:
-        create_invoice(odoo, partner_id, journal, ref, amount, company_id)
 
-    pos_order_id = create_pos_order(odoo, partner_id, journal, company_id)
+    seeded = []
+    pos_order_id = None
+    for cust in DEMO_CUSTOMERS:
+        print('')
+        print('%s:' % cust['name'])
+        partner_id = find_or_create_customer(odoo, cust)
+        for ref, amount in zip(invoice_refs(cust), cust['invoices']):
+            create_invoice(odoo, partner_id, journal, ref, amount, company_id)
+        if cust['slug'] == POS_CUSTOMER_SLUG:
+            pos_order_id = create_pos_order(odoo, partner_id, journal, company_id)
+        seeded.append((cust, partner_id))
 
-    lines = odoo.kw('account.move.line', 'search_read', [[
-        ['partner_id', '=', partner_id],
-        ['account_id.account_type', '=', 'asset_receivable'],
-        ['parent_state', '=', 'posted'],
-        ['reconciled', '=', False],
-    ]], {'fields': ['amount_residual']})
-    outstanding = sum(l['amount_residual'] for l in lines)
+    print('')
+    print('Outstanding balances (same domain as Partner Ledger and the receipt):')
+    totals = {}
+    for cust, partner_id in seeded:
+        lines = odoo.kw('account.move.line', 'search_read', [[
+            ['partner_id', '=', partner_id],
+            ['account_id.account_type', '=', 'asset_receivable'],
+            ['parent_state', '=', 'posted'],
+            ['reconciled', '=', False],
+        ]], {'fields': ['amount_residual']})
+        outstanding = sum(l['amount_residual'] for l in lines)
+        totals[cust['slug']] = outstanding
+        print('  %-34s %10.3f' % (cust['name'], outstanding))
 
+    pos_cust = next(c for c in DEMO_CUSTOMERS if c['slug'] == POS_CUSTOMER_SLUG)
+    pos_total_due = totals[pos_cust['slug']]
     # The POS demo order's own invoice is excluded from its "previous" due, so
     # quote that figure separately — it is what its receipt will actually show.
-    prev_for_pos_order = outstanding - POS_TOTAL if pos_order_id else outstanding
+    prev_for_pos_order = pos_total_due - POS_TOTAL if pos_order_id else pos_total_due
 
     print('')
-    print('Done. "%s" now owes %.3f in total.' % (DEMO_CUSTOMER, outstanding))
-    print('')
     print('To test:')
-    print('  1. Accounting -> Invoices -> open a DEMO-DUE invoice -> Print PDF.')
-    print('     Fastest check: needs no POS session.')
+    print('  1. Accounting -> Invoices -> open a DEMO-DUE invoice -> Print.')
+    print('     Fastest check: needs no POS session, no app.')
     if pos_order_id:
         print('  2. My Orders -> open the %s order -> print. Expect:' % POS_ORDER_TAG)
         print('       Previous Due  %.3f' % prev_for_pos_order)
         print('       This Invoice  %.3f' % POS_TOTAL)
-        print('       TOTAL DUE     %.3f' % outstanding)
+        print('       TOTAL DUE     %.3f' % pos_total_due)
     else:
         print('  2. (POS order skipped — see the note above.)')
-    print('  3. Start a new POS sale for "%s" — the amber "Previous Due"' % DEMO_CUSTOMER)
-    print('     card should read %.3f on the payment screen.' % outstanding)
-    print('  4. Cross-check against Accounting -> Partner Ledger for this customer.')
-    print('  5. Re-run with --cleanup to remove all of it.')
+    print('  3. Start a new POS sale for "%s" — the amber' % pos_cust['name'])
+    print('     "Previous Due" card should read %.3f on the payment screen.' % pos_total_due)
+    print('  4. IN THE APP, complete that sale on credit, then open it in')
+    print('     My Orders. The Customer Due card there is a FROZEN snapshot')
+    print('     written at sale time — seeded data alone cannot produce it,')
+    print('     only a sale made through the app can.')
+    print('  5. Cross-check against Accounting -> Partner Ledger ("With residual").')
+    print('  6. Re-run with --cleanup to remove all of it.')
 
 
 if __name__ == '__main__':

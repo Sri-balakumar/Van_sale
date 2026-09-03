@@ -12,6 +12,7 @@ import {
   fetchPosConfigPaymentMethods,
   fetchPartnerIdProofOdoo,
   fetchPartnerOutstandingOdoo,
+  captureOrderDueOdoo,
   updatePosOrderSignaturesOdoo,
   submitPosOrderToOdoo,
   getCurrentDeviceLocation,
@@ -1236,6 +1237,23 @@ const POSPayment = ({ navigation, route }) => {
                       }
                     } catch (outerPayErr) {
                       console.warn('[INVOICE PAYMENT] Error checking/creating payment:', outerPayErr);
+                    }
+
+                    // Freeze the customer's due onto the order, now that the
+                    // invoice is posted, linked and every leg reconciled. This
+                    // is the only correct moment: the server reads the invoice
+                    // residual, so capturing any earlier would record a
+                    // part-paid order as entirely unpaid. Read back later by
+                    // the Orders History screen. Idempotent and fail-soft — a
+                    // failure here must never affect a completed sale.
+                    try {
+                      const dueSnap = await captureOrderDueOdoo({ orderId: createdOrderId });
+                      push(dueSnap
+                        ? `captureDue: prev=${dueSnap.previousDue} this=${dueSnap.thisInvoiceDue} total=${dueSnap.totalDue}`
+                        : 'captureDue: unavailable');
+                    } catch (dueErr) {
+                      push(`captureDue: err ${dueErr?.message || dueErr}`);
+                      console.warn('[ORDER DUE] capture failed:', dueErr);
                     }
 
                   }

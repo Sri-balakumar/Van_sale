@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder, fetchPartnerOutstandingOdoo } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder, fetchPartnerOutstandingOdoo, fetchOrderDueSnapshotOdoo } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef, printPageSize } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -36,6 +36,12 @@ const ORANGE = '#F47B20';
 const SOFT_GREEN_BG = '#DCFCE7';
 const SOFT_GREEN_FG = '#166534';
 const MUTED = '#8896ab';
+// Amber "money owed" palette — the same one `splitBadge` below and the POS
+// payment screen's Previous Due card already use, so the Customer Due card
+// reads as the same feature across both screens.
+const DUE_BG = '#FFF7ED';
+const DUE_BORDER = '#FED7AA';
+const DUE_FG = '#9A3412';
 
 const stateBadge = (state) => {
   switch (state) {
@@ -132,6 +138,22 @@ const OrderDetailScreen = ({ navigation, route }) => {
       .catch(() => { if (alive) setDue(null); });
     return () => { alive = false; };
   }, [order?.partner?.id, order?.account_move, order?.amount_total, order?.amount_paid]);
+
+  // Frozen Customer Due snapshot, stored on the order when it was sold. This
+  // is NOT `due` above: that one is live (what the customer owes right now) and
+  // feeds the printed receipt; this one is history (what they owed on the day
+  // of this sale) and never changes once captured. The two legitimately differ
+  // once the customer settles up.
+  const [dueSnapshot, setDueSnapshot] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const id = order?.id || null;
+    if (!id) { setDueSnapshot(null); return undefined; }
+    fetchOrderDueSnapshotOdoo({ orderId: id })
+      .then((res) => { if (alive) setDueSnapshot(res); })
+      .catch(() => { if (alive) setDueSnapshot(null); });
+    return () => { alive = false; };
+  }, [order?.id]);
 
   // Return-Products button state — true while the pos.order.refund RPC is in
   // flight so the button can show a spinner and prevent double-taps. The
@@ -689,6 +711,33 @@ const OrderDetailScreen = ({ navigation, route }) => {
           </View>
         </View>
 
+        {/* Customer Due — the frozen snapshot taken when this order was sold,
+            so it reads as history rather than a live balance. Hidden when the
+            order predates the feature (`captured` false, which is why a plain
+            zero check is not enough), when the module isn't installed, and
+            when the customer owed nothing — a settled sale looks as before. */}
+        {dueSnapshot?.captured && Number(dueSnapshot.totalDue) > 0 ? (
+          <View style={[s.totalsCard, s.dueCard]}>
+            <View style={s.dueHeaderRow}>
+              <MaterialIcons name="account-balance-wallet" size={16} color={DUE_FG} />
+              <Text style={s.dueTitle}>CUSTOMER DUE</Text>
+            </View>
+            <View style={s.totalRow}>
+              <Text style={s.dueLabel}>Previous Due</Text>
+              <Text style={s.dueValue}>{formatCurrency(dueSnapshot.previousDue, currency)}</Text>
+            </View>
+            <View style={s.totalRow}>
+              <Text style={s.dueLabel}>This Invoice</Text>
+              <Text style={s.dueValue}>{formatCurrency(dueSnapshot.thisInvoiceDue, currency)}</Text>
+            </View>
+            <View style={s.dueDivider} />
+            <View style={s.totalRow}>
+              <Text style={s.dueGrandLabel}>Total Due</Text>
+              <Text style={s.dueGrandValue}>{formatCurrency(dueSnapshot.totalDue, currency)}</Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* Payments — one row per pos.payment record. For split-paid orders
             (more than one payment) this is the only place the breakdown is
             visible; the totals card alone just shows `amount_paid` and hides
@@ -1118,6 +1167,25 @@ const s = StyleSheet.create({
   divider: { height: 1, backgroundColor: '#F1F2F6', marginVertical: 8 },
   grandLabel: { fontSize: 15, color: NAVY, fontFamily: FONT_FAMILY.urbanistBold },
   grandValue: { fontSize: 17, color: ORANGE, fontFamily: FONT_FAMILY.urbanistBold },
+
+  // Customer Due card — the amber "money owed" treatment already used by
+  // `splitBadge` below and by the POS payment screen's Previous Due card, so
+  // the two screens read as one feature. Layered over `totalsCard` so it keeps
+  // the same radius, padding and stack spacing as Totals and Payments.
+  dueCard: { backgroundColor: DUE_BG, borderWidth: 1, borderColor: DUE_BORDER },
+  dueHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  dueTitle: {
+    fontSize: 11,
+    color: DUE_FG,
+    fontFamily: FONT_FAMILY.urbanistBold,
+    letterSpacing: 0.6,
+    marginLeft: 6,
+  },
+  dueLabel: { fontSize: 13, color: DUE_FG, fontFamily: FONT_FAMILY.urbanistMedium },
+  dueValue: { fontSize: 13, color: DUE_FG, fontFamily: FONT_FAMILY.urbanistBold },
+  dueDivider: { height: 1, backgroundColor: DUE_BORDER, marginVertical: 8 },
+  dueGrandLabel: { fontSize: 15, color: DUE_FG, fontFamily: FONT_FAMILY.urbanistBold },
+  dueGrandValue: { fontSize: 17, color: DUE_FG, fontFamily: FONT_FAMILY.urbanistBold },
 
   // Payments card — header row with title + optional split badge
   paymentsHeaderRow: {

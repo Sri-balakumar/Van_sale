@@ -1372,6 +1372,90 @@ export const fetchPartnerOutstandingOdoo = async ({ partnerId, excludeMoveId = n
   }
 };
 
+// ── Customer Due snapshot on a pos.order ──────────────────────────────────
+// `fetchPartnerOutstandingOdoo` above is LIVE — it answers "what does this
+// customer owe right now?" and is what the receipt and the POS payment card
+// use. The two helpers below deal with the FROZEN copy stored on the order
+// itself, which answers "what did they owe on the day of that sale?" and is
+// what Orders History shows. The two can legitimately differ once the
+// customer pays; that is the point of a snapshot.
+//
+// Both fail soft to null so an Odoo without pos_dynamic_invoice (or on a
+// version older than 19.0.31.0.0, where these fields do not exist) never
+// breaks a sale or an order screen.
+
+// Freeze the customer's due onto the order. Call this ONCE, after the invoice
+// is created, linked, and every payment leg reconciled — the server reads the
+// invoice residual, so calling earlier records a part-paid order as unpaid.
+// The server method is idempotent, so a retry cannot rewrite the snapshot.
+export const captureOrderDueOdoo = async ({ orderId } = {}) => {
+  if (!orderId) return null;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'capture_customer_due',
+        args: [[Number(orderId)]],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data?.error) {
+      console.warn('[ORDER DUE] capture error:', resp.data.error?.data?.message || resp.data.error);
+      return null;
+    }
+    const res = resp.data?.result || null;
+    console.log('[ORDER DUE] captured for order', orderId, res);
+    return res;
+  } catch (e) {
+    console.warn('captureOrderDueOdoo exception:', e?.message || e);
+    return null;
+  }
+};
+
+// Read the frozen snapshot back for Orders History.
+//
+// Deliberately a SEPARATE read rather than four more names in
+// fetchPosOrderDetailOdoo's hard-coded `fields` list: an unknown field there
+// makes that whole call fail, which would blank the Order Detail screen on any
+// install without the module. Here a failure just means "no snapshot".
+//
+// Returns null when unavailable, and { captured: false } for an order placed
+// before this feature existed — the caller must show nothing in that case
+// rather than rendering zeros as if the customer owed nothing.
+export const fetchOrderDueSnapshotOdoo = async ({ orderId } = {}) => {
+  if (!orderId) return null;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'read',
+        args: [[Number(orderId)], ['customer_previous_due', 'customer_this_due', 'customer_total_due', 'customer_due_captured']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data?.error) {
+      // Expected on an install without the module — not worth a loud warning.
+      console.log('[ORDER DUE] snapshot unavailable:', resp.data.error?.data?.message || 'unknown field');
+      return null;
+    }
+    const row = (resp.data?.result || [])[0];
+    if (!row) return null;
+    return {
+      captured: !!row.customer_due_captured,
+      previousDue: Number(row.customer_previous_due) || 0,
+      thisInvoiceDue: Number(row.customer_this_due) || 0,
+      totalDue: Number(row.customer_total_due) || 0,
+    };
+  } catch (e) {
+    console.warn('fetchOrderDueSnapshotOdoo exception:', e?.message || e);
+    return null;
+  }
+};
+
 // Distinct months/years that actually have data (for the Date filter's period
 // sub-options — like Odoo, which lists only used months). Derived from the
 // earliest and latest posting date under the current (non-date) filters.

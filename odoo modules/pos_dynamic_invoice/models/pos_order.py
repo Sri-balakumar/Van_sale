@@ -1,4 +1,8 @@
+import logging
+
 from odoo import fields, models
+
+_logger = logging.getLogger(__name__)
 
 
 class PosOrder(models.Model):
@@ -12,12 +16,48 @@ class PosOrder(models.Model):
     the same four templates. Exposes get_dynamic_receipt_html() so the mobile
     app can fetch the rendered receipt HTML for any of the six paper sizes.
 
-    No new stored fields are added — order data is read from existing
-    pos.order / pos.order.line / pos.payment records plus the signature
-    ir.attachment rows the app already writes.
+    Order data is read from existing pos.order / pos.order.line / pos.payment
+    records plus the signature ir.attachment rows the app already writes. The
+    only stored fields are the Customer Due snapshot below, which the receipt
+    does NOT read — it keeps computing the balance live, exactly as before.
     """
     _name = 'pos.order'
     _inherit = ['pos.order', 'pos.dynamic.receipt.mixin']
+
+    # ------------------------------------------------------------------
+    # Customer Due snapshot
+    # ------------------------------------------------------------------
+    # What the customer owed at the moment THIS order was sold, frozen. The
+    # receipt recomputes the balance live on every print, so it always prints
+    # today's figure; these fields are the historical record the app's Orders
+    # History reads, and they never move once captured.
+    customer_previous_due = fields.Monetary(
+        string='Previous Due',
+        currency_field='currency_id',
+        readonly=True, copy=False,
+        help="What this customer owed BEFORE this order, captured when the "
+             "order was sold. Frozen — later payments do not change it.",
+    )
+    customer_this_due = fields.Monetary(
+        string='This Order Due',
+        currency_field='currency_id',
+        readonly=True, copy=False,
+        help="How much of this order was left unpaid when it was sold.",
+    )
+    customer_total_due = fields.Monetary(
+        string='Total Due',
+        currency_field='currency_id',
+        readonly=True, copy=False,
+        help="Previous Due + This Order Due — the customer's running balance "
+             "immediately after this order.",
+    )
+    customer_due_captured = fields.Boolean(
+        string='Customer Due Captured',
+        readonly=True, copy=False, default=False,
+        help="True once the snapshot has been taken. Distinguishes a customer "
+             "who genuinely owed nothing from an order placed before this "
+             "feature existed (or outside the app), which has no snapshot.",
+    )
 
     # ------------------------------------------------------------------
     # Backend button -> open the paper-size popup
@@ -207,3 +247,56 @@ class PosOrder(models.Model):
         """
         self.ensure_one()
         return self._render_dynamic_html('order_id', paper_size, paper_height)
+
+    # ------------------------------------------------------------------
+    # App entry point — freeze the customer's due onto this order
+    # ------------------------------------------------------------------
+    def capture_customer_due(self):
+        """Store what the customer owed at the moment this order was sold.
+
+        Called by the app over JSON-RPC once the sale is fully settled — the
+        invoice created, linked, and every cash/card/split leg reconciled.
+        That timing matters: `_receipt_amount_paid()` reads the linked
+        invoice's residual, so capturing before reconciliation would record a
+        part-paid order as entirely unpaid.
+
+        Deliberately reuses the same two helpers the receipt uses, so the
+        stored figures and a printed receipt are produced by one implementation
+        and cannot drift apart.
+
+        Idempotent by design: a snapshot is taken once and never moves. Calling
+        this again returns what was already stored, so a retry (or a second
+        print) can never rewrite history with a later balance.
+
+        Never raises — a bookkeeping failure must not break a completed sale.
+        The app treats a null result as "no snapshot" and simply shows nothing.
+        """
+        self.ensure_one()
+        if self.customer_due_captured:
+            return self._customer_due_values()
+        try:
+            previous = self._partner_previous_due()
+            # `_receipt_amount_paid()` (not `amount_paid`) — the Customer
+            # Account tender counts as paid on pos.order, so a credit sale
+            # would otherwise snapshot This Order Due as 0.
+            this = (self.amount_total or 0.0) - (self._receipt_amount_paid() or 0.0)
+            self.sudo().write({
+                'customer_previous_due': previous,
+                'customer_this_due': this,
+                'customer_total_due': previous + this,
+                'customer_due_captured': True,
+            })
+        except Exception:  # noqa: BLE001 - never break a completed sale
+            _logger.exception('capture_customer_due failed for pos.order %s', self.id)
+            return None
+        return self._customer_due_values()
+
+    def _customer_due_values(self):
+        """The stored snapshot in the shape the app expects."""
+        self.ensure_one()
+        return {
+            'previousDue': self.customer_previous_due,
+            'thisInvoiceDue': self.customer_this_due,
+            'totalDue': self.customer_total_due,
+            'captured': self.customer_due_captured,
+        }
