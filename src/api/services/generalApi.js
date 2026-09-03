@@ -1456,6 +1456,118 @@ export const fetchOrderDueSnapshotOdoo = async ({ orderId } = {}) => {
   }
 };
 
+// The same snapshot as above, but for a whole page of orders at once — the
+// Orders list needs it per row to decide which rows get a Due pill.
+//
+// Deliberately NOT extra names in fetchOrdersOdoo's `fields:` array. That call
+// re-throws on an Odoo error rather than failing soft, so an unknown field on
+// an install without pos_dynamic_invoice >= 19.0.31.0.0 would propagate out and
+// leave the entire Orders list blank. A separate read degrades to "no pills".
+//
+// Also why this does not gate on checkDynamicInvoiceInstalled(): that flag is
+// false when the module IS installed but the company's "Use Dynamic Invoice on
+// App" switch is off, which would hide pills on shops that do have the data.
+//
+// Returns a { [orderId]: { captured, previousDue, thisInvoiceDue, totalDue } }
+// map, or null when unavailable.
+export const fetchOrdersDueSnapshotsOdoo = async ({ orderIds = [] } = {}) => {
+  const ids = (Array.isArray(orderIds) ? orderIds : [])
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return null;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'read',
+        args: [ids, ['customer_previous_due', 'customer_this_due', 'customer_total_due', 'customer_due_captured']],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data?.error) {
+      // Expected on an install without the module — not worth a loud warning.
+      console.log('[ORDER DUE] batch snapshot unavailable:', resp.data.error?.data?.message || 'unknown field');
+      return null;
+    }
+    const map = {};
+    for (const row of (resp.data?.result || [])) {
+      map[row.id] = {
+        captured: !!row.customer_due_captured,
+        previousDue: Number(row.customer_previous_due) || 0,
+        thisInvoiceDue: Number(row.customer_this_due) || 0,
+        totalDue: Number(row.customer_total_due) || 0,
+      };
+    }
+    console.log('[ORDER DUE] batch snapshot for', ids.length, 'order(s) ->', Object.keys(map).length, 'row(s)');
+    return map;
+  } catch (e) {
+    console.warn('fetchOrdersDueSnapshotsOdoo exception:', e?.message || e);
+    return null;
+  }
+};
+
+// The invoices BEHIND a customer's balance — one row per unpaid bill, for the
+// Due breakdown popup. `fetchPartnerOutstandingOdoo` above answers "how much?";
+// this answers "which bills?", and deliberately uses the identical domain so
+// the rows and the total can never disagree.
+//
+// Necessarily LIVE. The snapshot stored on the order records only the three
+// totals, not which invoices made them up, so this reflects what is open NOW.
+// Once the customer pays something it will legitimately differ from the frozen
+// figures — the popup labels the two sections so that reads as information
+// rather than a bug.
+//
+// Oldest first, so the longest-overdue bill is the first thing read.
+export const fetchPartnerOpenInvoicesOdoo = async ({ partnerId, excludeMoveId = null } = {}) => {
+  if (!partnerId) return null;
+  try {
+    const companyId = getActiveCompanyId();
+    const domain = [
+      ['partner_id', '=', Number(partnerId)],
+      ['company_id', '=', companyId],
+      ['account_id.account_type', '=', 'asset_receivable'],
+      ['parent_state', '=', 'posted'],
+      ['reconciled', '=', false],
+    ];
+    if (excludeMoveId) domain.push(['move_id', '!=', Number(excludeMoveId)]);
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'account.move.line',
+        method: 'search_read',
+        args: [domain],
+        kwargs: {
+          fields: ['move_id', 'move_name', 'date', 'date_maturity', 'amount_residual'],
+          order: 'date asc, id asc',
+          context: { allowed_company_ids: [companyId] },
+        },
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data?.error) {
+      console.warn('[OPEN INVOICES] Odoo error:', resp.data.error?.data?.message || resp.data.error);
+      return null;
+    }
+    const rows = (resp.data?.result || []).map((l) => ({
+      id: l.id,
+      moveId: Array.isArray(l.move_id) ? l.move_id[0] : l.move_id,
+      // move_name is the invoice number; the move_id tuple's label carries the
+      // ref in brackets too, so fall back to it before showing a bare id.
+      name: l.move_name || (Array.isArray(l.move_id) ? l.move_id[1] : '') || '—',
+      date: l.date_maturity || l.date || '',
+      residual: Number(l.amount_residual) || 0,
+    }));
+    const total = rows.reduce((s, r) => s + r.residual, 0);
+    console.log('[OPEN INVOICES] partner', partnerId, '| rows', rows.length, '| total', total);
+    return { rows, total };
+  } catch (e) {
+    console.warn('fetchPartnerOpenInvoicesOdoo exception:', e?.message || e);
+    return null;
+  }
+};
+
 // Distinct months/years that actually have data (for the Date filter's period
 // sub-options — like Odoo, which lists only used months). Derived from the
 // earliest and latest posting date under the current (non-date) filters.

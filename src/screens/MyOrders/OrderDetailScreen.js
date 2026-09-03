@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder, fetchPartnerOutstandingOdoo, fetchOrderDueSnapshotOdoo } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder, fetchPartnerOutstandingOdoo, fetchOrderDueSnapshotOdoo, fetchPartnerOpenInvoicesOdoo } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef, printPageSize } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -30,6 +30,7 @@ import { FeatureGate } from '@components/FeatureGate';
 import LocationModal from '@components/Modal/LocationModal';
 import PaperSizeModal from '@components/Modal/PaperSizeModal';
 import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
+import DueBreakdownModal from '@components/Modal/DueBreakdownModal';
 
 const NAVY = COLORS.primaryThemeColor;
 const ORANGE = '#F47B20';
@@ -88,6 +89,9 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const [order, setOrder] = useState(null);
   const [locationModalVisible, setLocationModalVisible] = useState(false);
   const [taxModalVisible, setTaxModalVisible] = useState(false);
+  const [dueModalVisible, setDueModalVisible] = useState(false);
+  const [dueInvoices, setDueInvoices] = useState(null);
+  const [dueInvoicesLoading, setDueInvoicesLoading] = useState(false);
   // Each `pos.payment` attached to this order — drives the Payments card so
   // split-paid orders surface every method + amount instead of just the
   // aggregate `amount_paid`.
@@ -154,6 +158,29 @@ const OrderDetailScreen = ({ navigation, route }) => {
       .catch(() => { if (alive) setDueSnapshot(null); });
     return () => { alive = false; };
   }, [order?.id]);
+
+  // Which invoices make up that balance — fetched LAZILY, only when the popup
+  // is opened, matching how MyOrdersScreen and InvoicesListScreen load their
+  // tax modals. A screen the user never opens the popup on makes no call.
+  //
+  // This list is live, unlike the snapshot above: the order stores the three
+  // totals but not which invoices produced them. The modal labels both
+  // sections so the difference reads as information once the customer pays.
+  const openDueModal = async () => {
+    setDueModalVisible(true);
+    const partnerId = order?.partner?.id || null;
+    if (!partnerId) { setDueInvoices(null); return; }
+    setDueInvoicesLoading(true);
+    try {
+      const res = await fetchPartnerOpenInvoicesOdoo({ partnerId });
+      setDueInvoices(res);
+    } catch (e) {
+      console.warn('[ORDER DUE] open invoices fetch failed:', e?.message || e);
+      setDueInvoices(null);
+    } finally {
+      setDueInvoicesLoading(false);
+    }
+  };
 
   // Return-Products button state — true while the pos.order.refund RPC is in
   // flight so the button can show a spinner and prevent double-taps. The
@@ -831,6 +858,25 @@ const OrderDetailScreen = ({ navigation, route }) => {
             </TouchableOpacity>
           ) : null}
 
+          {/* Due — which invoices make up this customer’s balance. Sibling of
+              Tax Breakdown: the card above gives the number, this gives the
+              detail. Gated exactly like that card, and `captured` is the half
+              that matters — it separates an order with no snapshot (placed
+              before this feature, or outside the app) from a customer who
+              genuinely owes nothing, which an amount test alone cannot do. */}
+          {dueSnapshot?.captured && Number(dueSnapshot.totalDue) > 0 ? (
+            <TouchableOpacity
+              onPress={openDueModal}
+              activeOpacity={0.85}
+              style={[s.invoiceChip, { borderColor: DUE_BORDER }]}
+            >
+              <View style={s.invoiceChipIcon}>
+                <MaterialIcons name="account-balance-wallet" size={20} color={DUE_FG} />
+              </View>
+              <Text style={s.invoiceChipText}>Due</Text>
+            </TouchableOpacity>
+          ) : null}
+
           {/* Return Products — Odoo-style refund. Rendered ONLY when the
               order is eligible: already-refunded / refund-of / non-paid
               orders hide the chip entirely so the cashier never sees an
@@ -950,6 +996,17 @@ const OrderDetailScreen = ({ navigation, route }) => {
         order={order}
         currency={currency}
         onClose={() => setTaxModalVisible(false)}
+      />
+
+      {/* Due breakdown — frozen snapshot on top, live open invoices below. */}
+      <DueBreakdownModal
+        isVisible={dueModalVisible}
+        order={order}
+        snapshot={dueSnapshot}
+        openInvoices={dueInvoices}
+        loading={dueInvoicesLoading}
+        currency={currency}
+        onClose={() => setDueModalVisible(false)}
       />
 
       {/* Paper-size picker — fires before Preview / Download / Print so the
@@ -1215,11 +1272,20 @@ const s = StyleSheet.create({
   // Invoice action buttons (Preview / Download / Print)
   invoiceActionRow: {
     flexDirection: 'row',
+    // Wraps because the chips are flex:1 in this row and up to seven can be
+    // visible at once (Preview, Download, Print, Tax, Due, Return/Payment,
+    // Location). Without wrapping they all squeeze and the labels truncate.
+    flexWrap: 'wrap',
     gap: 10,
     marginTop: 12,
   },
   invoiceChip: {
     flex: 1,
+    // minWidth is what actually makes the row wrap. `flex: 1` sets flexBasis
+    // to 0, so without a floor every chip collapses to fit one line and
+    // flexWrap never triggers — the labels just truncate instead. Clamping
+    // the basis gives the wrap something to break on.
+    minWidth: 104,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

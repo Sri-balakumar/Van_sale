@@ -115,6 +115,14 @@ const CreateInvoicePreview = ({ navigation, route }) => {
   // it would count this order's own amount twice against "This Invoice".
   const [invoiceResolved, setInvoiceResolved] = useState(false);
   const [due, setDue] = useState(null);
+  // Measured height of the sticky footer. It is position:absolute, so it does
+  // not take space in the ScrollView — the scroll content has to reserve that
+  // room itself or the last block (the Thank-you note) sits under the footer
+  // with nothing left to scroll, and can never be brought into view.
+  // Measured rather than hard-coded because the footer’s height varies: the
+  // “PDF (Credit)” chip is conditional, and a fourth chip in that flex row can
+  // push the labels onto two lines.
+  const [footerHeight, setFooterHeight] = useState(0);
 
   // Done = wipe the in-memory cart and reset navigation to the Home tab.
   // Used both by the explicit "Done" button and the back-arrow in the hero.
@@ -497,7 +505,7 @@ const CreateInvoicePreview = ({ navigation, route }) => {
 
       <View style={s.surface}>
         <ScrollView
-          contentContainerStyle={{ padding: 14, paddingBottom: 110 }}
+          contentContainerStyle={{ padding: 14, paddingBottom: (footerHeight || 110) + 16 }}
           showsVerticalScrollIndicator={false}
         >
           {/* Date / time strip — no cashier */}
@@ -748,7 +756,10 @@ const CreateInvoicePreview = ({ navigation, route }) => {
         </ScrollView>
 
         {/* Sticky bottom action — 3 small action chips + full-width Done CTA */}
-        <View style={s.footer}>
+        <View
+          style={s.footer}
+          onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        >
           <View style={s.actionRow}>
             <TouchableOpacity
               onPress={() => startAction('preview')}

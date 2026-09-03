@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, ScrollView } from 'react-native';
 import { NavigationHeader } from '@components/Header';
-import { fetchOrdersOdoo, fetchPosOrderDetailOdoo } from '@api/services/generalApi';
+import { fetchOrdersOdoo, fetchPosOrderDetailOdoo, fetchOrdersDueSnapshotsOdoo, fetchPartnerOpenInvoicesOdoo } from '@api/services/generalApi';
 import { useFocusEffect } from '@react-navigation/native';
 import { FlashList } from '@shopify/flash-list';
 import { OverlayLoader } from '@components/Loader';
@@ -17,6 +17,7 @@ import Toast from 'react-native-toast-message';
 import { useFeatureHidden } from '@components/FeatureGate';
 import { COLORS } from '@constants/theme';
 import TaxBreakdownModal from '@components/Modal/TaxBreakdownModal';
+import DueBreakdownModal from '@components/Modal/DueBreakdownModal';
 
 // Chip filters surfaced at the top of the list. Mirrors Odoo's POS Orders
 // filter dropdown — two chips combine multiple states via OR (Odoo's
@@ -74,6 +75,16 @@ const MyOrdersScreen = ({ navigation, route }) => {
   const [taxModalOrder, setTaxModalOrder] = useState(null);
   const [taxModalLoading, setTaxModalLoading] = useState(false);
 
+  // Customer-due state for the amber Due pill on each row.
+  // `dueByOrder` is keyed by order id and MERGED, never replaced: the list
+  // paginates, so fetchMoreData appends rows whose snapshots must join the
+  // ones already held rather than wipe them.
+  const [dueByOrder, setDueByOrder] = useState({});
+  const [dueModalVisible, setDueModalVisible] = useState(false);
+  const [dueModalOrder, setDueModalOrder] = useState(null);
+  const [dueInvoices, setDueInvoices] = useState(null);
+  const [dueInvoicesLoading, setDueInvoicesLoading] = useState(false);
+
   const openTaxModal = useCallback(async (orderSummary) => {
     setTaxModalOrder({ ...orderSummary, lines: [] });
     setTaxModalVisible(true);
@@ -87,6 +98,47 @@ const MyOrdersScreen = ({ navigation, route }) => {
       console.warn('[OrdersList] tax modal fetch failed', e?.message || e);
     } finally {
       setTaxModalLoading(false);
+    }
+  }, []);
+
+  // Pull the frozen due snapshots for whatever rows are on screen. Kept out of
+  // fetchOrdersOdoo on purpose: that call re-throws on an Odoo error, so an
+  // unknown field on an install without the module would blank the whole list.
+  // Here a failure just means no pills.
+  useEffect(() => {
+    let alive = true;
+    const ids = (Array.isArray(data) ? data : []).map((o) => o?.id).filter(Boolean);
+    if (!ids.length) return undefined;
+    fetchOrdersDueSnapshotsOdoo({ orderIds: ids })
+      .then((map) => { if (alive && map) setDueByOrder((prev) => ({ ...prev, ...map })); })
+      .catch(() => { /* no pills, list is unaffected */ });
+    return () => { alive = false; };
+  }, [data]);
+
+  // Same shape as openTaxModal: show the popup at once, then lazily load the
+  // detail it needs. The invoice list is live; the three totals come from the
+  // frozen snapshot already in `dueByOrder`.
+  const openDueModal = useCallback(async (orderSummary) => {
+    // A list row carries partner_id as [id, name], but DueBreakdownModal reads
+    // order.partner.name — shim it so the popup can show the customer.
+    const pid = Array.isArray(orderSummary.partner_id) ? orderSummary.partner_id[0] : null;
+    const pname = Array.isArray(orderSummary.partner_id) ? orderSummary.partner_id[1] : '';
+    setDueModalOrder({ ...orderSummary, partner: pid ? { id: pid, name: pname } : null });
+    setDueInvoices(null);
+    setDueModalVisible(true);
+    if (!pid) return;
+    setDueInvoicesLoading(true);
+    try {
+      // No excludeMoveId: list rows carry no account_move, and the popup’s
+      // live section is “Open invoices now”, which should include this
+      // order’s own invoice.
+      const res = await fetchPartnerOpenInvoicesOdoo({ partnerId: pid });
+      setDueInvoices(res);
+    } catch (e) {
+      console.warn('[OrdersList] due modal fetch failed', e?.message || e);
+      setDueInvoices(null);
+    } finally {
+      setDueInvoicesLoading(false);
     }
   }, []);
 
@@ -306,6 +358,33 @@ const MyOrdersScreen = ({ navigation, route }) => {
               <Icon name="chevron-right" size={14} color="#1E88E5" />
             </TouchableOpacity>
           ) : null}
+          {/* Due — the customer’s frozen balance for this order. Sibling of
+              the Tax pill above: same shape, amber instead of blue. `captured`
+              is the half that matters in the guard — it separates an order with
+              no snapshot (placed before the feature, or outside the app) from a
+              customer who genuinely owes nothing. */}
+          {(() => {
+            const snap = dueByOrder[item.id];
+            if (!snap?.captured || Number(snap.totalDue) <= 0) return null;
+            return (
+              <TouchableOpacity
+                style={styles.dueChip}
+                activeOpacity={0.85}
+                onPress={(e) => {
+                  // Without this the row’s own onPress also fires and
+                  // navigates into the order instead of opening the popup.
+                  e?.stopPropagation?.();
+                  openDueModal(item);
+                }}
+              >
+                <Icon name="account-balance-wallet" size={14} color="#9A3412" />
+                <Text style={styles.dueChipText}>
+                  {`Due ${formatCurrency(snap.totalDue, currency || { symbol: '', name: '', position: 'before' })}`}
+                </Text>
+                <Icon name="chevron-right" size={14} color="#9A3412" />
+              </TouchableOpacity>
+            );
+          })()}
           <View style={styles.detailRow}>
             <Icon name="person-outline" size={16} color="#666" />
             <Text style={styles.detailText}>Salesperson: {userName}</Text>
@@ -317,7 +396,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
         </View>
       </TouchableOpacity>
     );
-  }, [currency, handleOrderTap, openTaxModal]);
+  }, [currency, handleOrderTap, openTaxModal, openDueModal, dueByOrder]);
 
   const keyExtractor = useCallback((item, index) => `order-${item.id || index}`, []);
 
@@ -405,6 +484,16 @@ const MyOrdersScreen = ({ navigation, route }) => {
         loading={taxModalLoading}
         currency={currency}
         onClose={() => setTaxModalVisible(false)}
+      />
+
+      <DueBreakdownModal
+        isVisible={dueModalVisible}
+        order={dueModalOrder}
+        snapshot={dueByOrder[dueModalOrder?.id]}
+        openInvoices={dueInvoices}
+        loading={dueInvoicesLoading}
+        currency={currency}
+        onClose={() => setDueModalVisible(false)}
       />
     </SafeAreaView>
   );
@@ -507,6 +596,27 @@ const styles = StyleSheet.create({
   taxChipText: {
     fontSize: 12,
     color: '#1E88E5',
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  // Mirrors taxChip, in the amber this feature uses everywhere else (the
+  // Customer Due card, the POS payment screen’s Previous Due card and the
+  // breakdown popup), so all four read as one thing.
+  dueChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    gap: 4,
+  },
+  dueChipText: {
+    fontSize: 12,
+    color: '#9A3412',
     fontWeight: '700',
     letterSpacing: 0.3,
   },
