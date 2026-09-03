@@ -317,7 +317,7 @@ Tap **Location** for **Order Location**, showing **Latitude** and **Longitude** 
 
 Tap **Orders** on Home. **Search Orders** looks in the order number, the customer and the salesperson, and four chips filter the list: **All**, **Paid**, **Draft** and **Cancelled**.
 
-Each row shows the order number, a status badge, the amount, the customer, the receipt number and the date. Refunds carry a red **REFUND** badge. An empty list says **No orders found**.
+Each row shows the order number, a status badge, the amount, the customer, the receipt number and the date. Where the customer still owes money, an amber **Due** pill sits under the receipt number with the amount; tap it to see the whole picture. Refunds carry a red **REFUND** badge. An empty list says **No orders found**.
 
 | Badge | What it means |
 | **New** | A draft — not paid yet |
@@ -332,14 +332,21 @@ Tapping a **draft** loads it back into the basket so you can finish it. Tapping 
 > TIP  There is no date filter on this screen. To look at a period, use **Sales Report** instead.
 
 | IMAGE 15 | The Orders list — status badges, a REFUND row and the search box
+| IMAGE 44 | The Orders list with an amber Due pill on the rows that still owe money
 
 ### Step 22  Read an Order
 
-The order screen shows the number, the receipt reference and a status pill, then **DATE**, **CUSTOMER**, **SALESPERSON** and **REGISTER**, the **ITEMS**, the totals and the payments taken.
+The order screen shows the number, the receipt reference and a status pill, then **DATE**, **CUSTOMER**, **SALESPERSON** and **REGISTER**, the **ITEMS**, the totals and the payments taken. If the customer owed money when this order was sold, an amber **CUSTOMER DUE** card sits under the totals with **Previous Due**, **This Invoice** and **Total Due**.
 
-Along the bottom are **Preview**, **Download**, **Print**, **Tax Breakdown** and **Location**. A greyed-out **Location** chip means the order has no position stored; tapping it says **No location**.
+Along the bottom are **Preview**, **Download**, **Print**, **Tax Breakdown**, **Due**, **Return Products** and **Location**. A greyed-out **Location** chip means the order has no position stored; tapping it says **No location**.
+
+The **Due** chip, and the **Due** pill on the Orders list, both open the same **Customer Due** box, which comes in two halves answering different questions. **WHEN THIS ORDER WAS SOLD** is history: **Previous Due**, **This Order** and **Total Due** are kept on the sale itself and never change, so this is always what was owed on the day. **OPEN INVOICES NOW** is today: every unpaid bill with its number, its date and what is still owed on it, added up as **Owed now**. Once everything is settled it reads **No open invoices — this customer is settled up.**
+
+> IMPORTANT  The two halves are meant to differ. When the customer pays something the top half stays where it was, because it is the record of that sale, while the bottom half drops. That is not a mistake — it is why both are there.
 
 | IMAGE 16 | An order opened from the list, with its items, totals and action chips
+| IMAGE 45 | The same order showing the amber CUSTOMER DUE card and the Due chip
+| IMAGE 46 | The Customer Due box — the frozen figures above, the open invoices below
 
 ### Step 23  Send Products Back
 
@@ -386,7 +393,18 @@ Tap **Save**. You will see **Contact created** or **Contact updated** and be ret
 
 ### Step 26  See What a Customer Owes
 
-There is no balance on the customer record itself. What a customer owes shows up in three places instead: the amber **Previous Due** card when you take their payment, the **Previous Due** / **This Invoice** / **Total Due** lines on their receipt, and in full under **Partner Ledger**.
+There is no balance on the customer record itself. What a customer owes shows up in five places instead:
+
+| Where | What it tells you |
+| The amber **Previous Due** card at payment | What they owed before the order you are ringing up |
+| The **Previous Due** / **This Invoice** / **Total Due** lines on the receipt | The whole picture, printed for the customer |
+| The **Due** pill on the **Orders** list | What they owed when that order was sold |
+| The **CUSTOMER DUE** card on the order | The same three figures, on the order itself |
+| The **Customer Due** box behind either **Due** | Those figures, plus every unpaid bill as it stands today |
+
+**Partner Ledger** remains the full account, every line, in one place.
+
+> TIP  The first four are all the sale’s own record and never change. Only the **Customer Due** box and **Partner Ledger** move as the customer pays.
 
 # PART 8   PRODUCTS AND STOCK
 
@@ -542,7 +560,7 @@ Tapping any row opens the invoice behind it.
 | Refund a sale | **Orders** → open the paid order → **Return Products** |
 | Look at a period | **Sales Report** |
 | Add or edit a customer | **Customers** |
-| See what a customer owes | **Partner Ledger**, or the **Previous Due** card at payment |
+| See what a customer owes | **Partner Ledger**, the **Due** pill on **Orders**, or the **Previous Due** card at payment |
 | Add or edit a product | **Products** |
 | Bring an archived product back | **Products** → **Show Archived** → **Restore Product** |
 | Check what you hold | **Stock** |

@@ -7,7 +7,7 @@
     "Shoot on the tablet in portrait unless 'landscape' is stated. Do not include any",
     "customer's real name or a real payment card in a capture."
   ],
-  "_status": "3 of 43 captured",
+  "_status": "6 of 46 captured",
 
   "1":  { "file": "01-login.png",                 "capture": "Sign-in screen: 'Welcome back', 'Login to continue to your store', the ACCOUNT card with Username or Email and Password, and the Auto Fill Credentials switch." },
   "2":  { "file": "02-home.png",                  "capture": "Home, scrolled to the top: company logo, banner carousel, the date/time pill, the 'Quick Access / Manage your store' bar, and at least the Sales & POS and Inventory sections." },
@@ -52,5 +52,9 @@
   "40": { "file": "40-invoice-layouts.png",       "capture": "The Invoice Layouts list showing one layout per paper size, each tagged Grid or Flow." },
   "41": { "file": "41-visual-editor.png",         "capture": "LANDSCAPE. The Visual Editor with all three panels visible - Design, Options and Live Preview - a block selected so Options is populated, and the toolbar showing Save/Undo/Redo/Grid/Add/Reset." },
   "42": { "file": "42-app-banners.png",           "capture": "The App Banners list with a couple of banners showing their Active / Inactive status and the New Banner button." },
-  "43": { "file": "43-user-manual.png",           "capture": "The User Manual screen with a document list, ideally with the View / Download popup open over it." }
+  "43": { "file": "43-user-manual.png",           "capture": "The User Manual screen with a document list, ideally with the View / Download popup open over it." },
+
+  "44": { "file": "44-orders-due-pill.jpg",       "capture": "HAVE IT. The Orders list with the amber Due pill under the Receipt and Tax pills on rows that still owe money." },
+  "45": { "file": "45-order-customer-due.jpg",    "capture": "HAVE IT. An open order showing the amber CUSTOMER DUE card - Previous Due, This Invoice, Total Due - and the Due chip in the action row." },
+  "46": { "file": "46-due-breakdown.jpg",         "capture": "HAVE IT. The Customer Due box: WHEN THIS ORDER WAS SOLD above, OPEN INVOICES NOW listing each unpaid bill, and Owed now beneath." }
 }
