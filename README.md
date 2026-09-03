@@ -106,7 +106,7 @@ eas build -p android --profile preview4     # internal distribution
 eas build -p android --profile production
 ```
 
-Current release: **v1.4.0**, Android package `com.alphalize.goldenspoon`.
+Current release: **v1.5.0**, Android package `com.alphalize.goldenspoon`.
 
 **When bumping a version, edit both `package.json` and `app.json`** so they stay in sync, and bump
 `expo.android.versionCode` (integer) and `expo.ios.buildNumber` (string) for every store-bound

@@ -12,6 +12,41 @@ build.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-03
+
+### Added
+- **Customer Due saved on the order.** What a customer owed is now recorded on
+  the sale itself rather than recomputed on every print. Four stored fields on
+  `pos.order` (Previous Due / This Order Due / Total Due, plus a captured flag),
+  written once when the app finishes a sale and frozen from then on — reopening
+  an old order shows what was owed on that day, not today.
+- **Due pill on the Orders list.** Rows carrying a due show an amber
+  `Due <amount>` pill beside the Receipt and Tax pills.
+- **Customer Due card** on the Order Detail screen, and a **Due chip** in its
+  action row.
+- **Due breakdown popup**, opened from either the pill or the chip. Shows the
+  frozen totals from the sale alongside the customer's open invoices as they
+  stand now — labelled separately, because once the customer pays, the two
+  legitimately differ.
+
+### Fixed
+- The "Thank you for your purchase!" note at the end of the post-payment
+  preview could not be scrolled into view — the sticky footer floated over it
+  and the scroll area reserved too little room. The footer is now measured, so
+  the reserved space matches whatever it actually renders (it varies: the
+  "PDF (Credit)" chip is conditional).
+- A credit sale recorded This Order Due as 0. `pos.order.amount_paid` counts the
+  Customer Account tender as paid, so the linked invoice's residual is used
+  instead.
+
+### Notes
+- Requires `pos_dynamic_invoice` **19.0.31.0.0** or later for the due fields.
+  Without it the app degrades quietly: no pills, no card, and every other screen
+  behaves exactly as before.
+- Orders placed before this release, or created outside the app, carry no
+  snapshot and show no due — the captured flag is what distinguishes them from a
+  customer who genuinely owes nothing.
+
 ## [1.4.0] - 2026-08-07
 
 ### Added

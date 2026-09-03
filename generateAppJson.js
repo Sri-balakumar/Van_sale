@@ -2,6 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { getConfig } from './src/utils/config/getConfig.js';
 import dotenv from 'dotenv';
+// Single source of truth for the app version. This used to be hard-coded here
+// and had drifted to 1.0.8, so regenerating app.json silently stamped the build
+// back to an ancient version and undid whatever bump had just been made.
+const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 dotenv.config();
 
@@ -22,7 +26,7 @@ const appJson = {
   expo: {
     name: config.appName,
     slug: config.appName.toLowerCase(),
-    version: '1.0.8',
+    version: pkg.version,
     orientation: 'portrait',
     icon: './assets/android/icon.png',
     userInterfaceStyle: 'light',
