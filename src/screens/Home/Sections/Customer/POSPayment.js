@@ -25,6 +25,7 @@ import {
   // does, so we route every paid order through that single path.
   deletePosOrderOdoo,
   fetchProductTaxMap,
+  fetchPosCompanyId,
 } from '@api/services/generalApi';
 import { IdProofCards } from '@components/IdProof';
 import { SignatureCapturePopup, SignatureCards } from '@components/Signature';
@@ -258,6 +259,13 @@ const POSPayment = ({ navigation, route }) => {
     route?.params?.registerId || route?.params?.posConfigId || null
   );
   const [posPaymentMethods, setPosPaymentMethods] = useState([]);
+  // Company that owns this register. A product shared across companies carries
+  // every company's sale tax, so the tax map has to be filtered to this one or
+  // the sale books a sister company's tax on top of the correct one.
+  // `resolved` flips once the lookup settles — even to null — so the tax fetch
+  // below never stalls waiting on a company that can't be determined.
+  const [posCompanyId, setPosCompanyId] = useState(null);
+  const [posCompanyResolved, setPosCompanyResolved] = useState(false);
 
   // Map journals to Odoo-style payment modes (cash / card / customer account)
   const getJournalForMode = (mode) => {
@@ -344,20 +352,37 @@ const POSPayment = ({ navigation, route }) => {
   // Hydrate the product → tax-rate map for the products currently in the
   // cart. The Tax row in the totals breakdown reads from this, so until
   // the fetch settles the row simply doesn't appear (no flash, no NaN).
+  // Resolve the register's company first — the tax map depends on it.
   useEffect(() => {
     let mounted = true;
+    if (!posConfigId && !sessionId) { setPosCompanyResolved(true); return undefined; }
+    (async () => {
+      const cid = await fetchPosCompanyId({ configId: posConfigId, sessionId });
+      if (!mounted) return;
+      if (cid) setPosCompanyId(cid);
+      setPosCompanyResolved(true);
+    })();
+    return () => { mounted = false; };
+  }, [posConfigId, sessionId]);
+
+  useEffect(() => {
+    let mounted = true;
+    // Wait for the company lookup to settle so the map is filtered correctly.
+    // A null company means "couldn't resolve" — fetch unfiltered rather than
+    // leave the cart with no tax at all.
+    if (!posCompanyResolved) return undefined;
     const ids = (products || [])
       .map((p) => Number(p.remoteId || p.id))
       .filter((n) => Number.isFinite(n) && n > 0);
     if (ids.length === 0) return undefined;
-    fetchProductTaxMap(ids)
+    fetchProductTaxMap(ids, { companyId: posCompanyId })
       .then((map) => {
-        console.log('[WithTax] tax map fetched', { ids, map });
+        console.log('[WithTax] tax map fetched', { ids, companyId: posCompanyId, map });
         if (mounted) setProductTaxMap(map || {});
       })
       .catch((e) => { console.warn('[WithTax] tax map fetch failed', e?.message || e); });
     return () => { mounted = false; };
-  }, []);
+  }, [posCompanyResolved, posCompanyId]);
 
   // Subtotal = naive sum of price × qty across cart. The `total`
   // (after discount) is what every downstream calculation reads.
@@ -608,7 +633,10 @@ const POSPayment = ({ navigation, route }) => {
         lockedTaxIds: p.lockedTaxIds,
       }));
       const partnerId = customer?.id || customer?._id || null;
-      const companyId = 1;
+      // The register's company, not a hard-coded 1 — on a multi-company
+      // database the order must be booked against the POS it was rung on.
+      // Falls back to 1 only when the lookup genuinely can't resolve.
+      const companyId = posCompanyId || 1;
 
       // posConfigId is resolved on mount (see useEffect above). Re-resolve
       // here only as a fallback in case the mount-time lookup was still in

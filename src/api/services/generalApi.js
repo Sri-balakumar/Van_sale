@@ -1932,12 +1932,12 @@ export const createCreditNoteOdoo = async ({ moveId, reason = '' } = {}) => {
 // when any of those taxes is price-inclusive (so the caller can decide
 // whether to back-out the embedded tax from the displayed price).
 // Empty/invalid input → {} so callers can treat it as a safe fallback.
-export const fetchProductTaxMap = async (productIds = []) => {
+export const fetchProductTaxMap = async (productIds = [], { companyId = null } = {}) => {
   try {
     const ids = (productIds || [])
       .map((v) => Number(v))
       .filter((n) => Number.isFinite(n) && n > 0);
-    console.log('[TAX MAP] input productIds:', ids);
+    console.log('[TAX MAP] input productIds:', ids, '| companyId', companyId);
     if (ids.length === 0) return {};
 
     // 1) Read taxes_id off each product.product. taxes_id is a many2many
@@ -1974,13 +1974,17 @@ export const fetchProductTaxMap = async (productIds = []) => {
     // 2) Read the matching account.tax records. `amount` is the percentage
     //    for amount_type='percent'; for fixed/grouped taxes it's a flat
     //    figure that doesn't translate cleanly to a percent — skip those.
+    // search_read, not read: `read` RAISES AccessError when any id is hidden by
+    // account.tax's company rule, which would lose the whole map (and with it
+    // every tax on the sale). search_read applies the same rule as a filter, so
+    // unreadable taxes simply drop out.
     const taxResp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
       jsonrpc: '2.0',
       method: 'call',
       params: {
         model: 'account.tax',
-        method: 'read',
-        args: [allTaxIds, ['id', 'name', 'amount', 'amount_type', 'price_include']],
+        method: 'search_read',
+        args: [[['id', 'in', allTaxIds]], ['id', 'name', 'amount', 'amount_type', 'price_include', 'company_id']],
         kwargs: {},
       },
     }, { headers: { 'Content-Type': 'application/json' } });
@@ -1993,23 +1997,46 @@ export const fetchProductTaxMap = async (productIds = []) => {
     console.log('[TAX MAP] account.tax rows:', JSON.stringify(taxRows));
     const taxById = {};
     for (const t of taxRows) {
+      const owner = Array.isArray(t.company_id) ? t.company_id[0] : null;
       taxById[t.id] = {
         amount: Number(t.amount) || 0,
         priceInclude: !!t.price_include,
         isPercent: t.amount_type === 'percent' || t.amount_type === 'division',
+        companyId: owner,
       };
     }
 
+    // A product shared across companies carries EVERY company's sale tax in
+    // taxes_id; Odoo narrows that per company at line creation and so must we.
+    // Without this filter a GROCERY SHOP sale also books the sister company's
+    // tax — overcharging the customer, and writing a tax the POS session can't
+    // read back, which is what breaks Return Products with an AccessError.
+    //
+    // Mirrors account.tax._filter_taxes_by_company: take the taxes of this
+    // company; if it has none, walk up the parent chain until a company does.
+    const chain = await _companyChain(companyId);
+    const taxesForChain = (rawIds) => {
+      if (chain.length === 0) return rawIds.filter((tid) => taxById[tid]);
+      for (const cid of chain) {
+        const match = rawIds.filter((tid) => taxById[tid] && taxById[tid].companyId === cid);
+        if (match.length) return match;
+      }
+      return [];
+    };
+
     const out = {};
     for (const r of prodRows) {
-      const taxIds = Array.isArray(r.taxes_id) ? r.taxes_id : [];
+      const rawIds = Array.isArray(r.taxes_id) ? r.taxes_id : [];
+      const taxIds = taxesForChain(rawIds);
       let rate = 0;
       let priceInclude = false;
       for (const tid of taxIds) {
         const t = taxById[tid];
-        if (!t) continue;
         if (t.isPercent) rate += t.amount;
         if (t.priceInclude) priceInclude = true;
+      }
+      if (rawIds.length !== taxIds.length) {
+        console.log('[TAX MAP] product', r.id, 'taxes', rawIds, '→ kept for company', companyId, ':', taxIds);
       }
       out[r.id] = { rate, priceInclude, taxIds };
     }
@@ -2574,21 +2601,163 @@ export const fetchSessionOngoing = async ({ sessionId } = {}) => {
   }
 };
 
+// A company followed by its ancestors, nearest first — the order Odoo's
+// account.tax._filter_taxes_by_company walks when picking a product's tax.
+// res.company.parent_path is stored root-first ("3/7/"), so reversing it gives
+// self → parent → grandparent. Falls back to just the company on any error.
+const _companyChain = async (companyId) => {
+  if (!companyId) return [];
+  try {
+    const rows = await _closeCallKw('res.company', 'read', [[Number(companyId)], ['parent_path']]);
+    const path = rows && rows[0] && rows[0].parent_path;
+    if (typeof path === 'string' && path.length) {
+      const ids = path.split('/').filter(Boolean).map(Number).filter((n) => Number.isFinite(n));
+      if (ids.length) return ids.reverse();
+    }
+  } catch (e) {
+    console.warn('[TAX MAP] company chain lookup failed:', e?.message);
+  }
+  return [Number(companyId)];
+};
+
+// Resolve the company a POS sale belongs to, from the register (pos.config) or
+// the open session. This is the company whose taxes a line may carry, so it
+// drives both the tax filter in fetchProductTaxMap and the company_id written
+// on the order. Returns null when it can't be determined — callers keep their
+// own fallback rather than guessing a company.
+export const fetchPosCompanyId = async ({ configId = null, sessionId = null } = {}) => {
+  try {
+    if (configId) {
+      const rows = await _closeCallKw('pos.config', 'read', [[Number(configId)], ['company_id']]);
+      const c = rows && rows[0] && rows[0].company_id;
+      if (Array.isArray(c)) {
+        console.log('[POS COMPANY] config', configId, '→', c[0], c[1]);
+        return c[0];
+      }
+    }
+    if (sessionId) {
+      const rows = await _closeCallKw('pos.session', 'read', [[Number(sessionId)], ['company_id']]);
+      const c = rows && rows[0] && rows[0].company_id;
+      if (Array.isArray(c)) {
+        console.log('[POS COMPANY] session', sessionId, '→', c[0], c[1]);
+        return c[0];
+      }
+    }
+  } catch (e) {
+    console.warn('[POS COMPANY] resolve failed:', e?.message);
+  }
+  return null;
+};
+
+// The companies this user is allowed to activate.
+//
+// Odoo REFUSES a context whose `allowed_company_ids` contains anything outside
+// `res.users.company_ids` ("Access to unauthorized or invalid companies"), so
+// this has to come from the user record. It deliberately does NOT use
+// res.company.search(): those record rules are group-based (an ERP manager's
+// rule is `[(1,'=',1)]`), so that call can return companies the user may see
+// but may not activate — which would make every RPC below fail.
+const _userAllowedCompanyIds = async () => {
+  try {
+    const raw = await AsyncStorage.getItem('userData');
+    const uid = raw ? JSON.parse(raw)?.uid : null;
+    if (!uid) return [];
+    const rows = await _closeCallKw('res.users', 'read', [[Number(uid)], ['company_ids']]);
+    const ids = rows && rows[0] && rows[0].company_ids;
+    return Array.isArray(ids) ? ids.filter(Boolean) : [];
+  } catch (e) {
+    console.warn('[Refund] could not read user companies:', e?.message);
+    return [];
+  }
+};
+
+// Build the RPC context for a refund.
+//
+// `allowed_company_ids` drives `env.companies`, which is what every
+// company-scoped ir.rule filters on — account.tax's rule is
+// `[('company_id','parent_of',company_ids)]`. A POS line can legitimately
+// carry a tax from a DIFFERENT company than the order (products shared across
+// companies hold each company's taxes), and Odoo reads those taxes while
+// recomputing the refund's prices. With only the session's default company
+// active that read raises AccessError and the refund is refused, so activate
+// every company the cashier is entitled to — the order's own company first, so
+// `env.company` still resolves to it.
+const _orderCompanyContext = async (orderId) => {
+  try {
+    let orderCompanyId = null;
+    try {
+      const rows = await _closeCallKw('pos.order', 'read', [[Number(orderId)], ['company_id']]);
+      const c = rows && rows[0] && rows[0].company_id;
+      if (Array.isArray(c)) orderCompanyId = c[0];
+    } catch (e) {
+      console.warn('[Refund] could not resolve order company:', e?.message);
+    }
+    const allowed = await _userAllowedCompanyIds();
+    const ids = [];
+    // Only ever send companies the user actually holds, or Odoo rejects the call.
+    if (orderCompanyId && allowed.includes(orderCompanyId)) ids.push(orderCompanyId);
+    for (const id of allowed) if (!ids.includes(id)) ids.push(id);
+    if (ids.length === 0) return undefined;
+    console.log('[Refund] allowed_company_ids →', ids, '| order company', orderCompanyId);
+    return { allowed_company_ids: ids };
+  } catch (e) {
+    console.warn('[Refund] company context failed:', e?.message);
+    return undefined;
+  }
+};
+
 // Create a refund pos.order for the given orderId via Odoo's pos.order.refund
 // method. Odoo's action_dict response shape varies by version — we cover both
 // the `res_id` and `domain: [['id','in',[...]]]` forms.
 export const refundPosOrder = async ({ orderId } = {}) => {
   if (!orderId) return { error: { message: 'orderId required' } };
+  console.log('[Refund] calling pos.order.refund for order', orderId);
   try {
-    const action = await _closeCallKw('pos.order', 'refund', [[Number(orderId)]]);
+    // Run the call with the ORDER's company active. Odoo builds the refund's
+    // taxes inside refund() (_refund → _compute_prices →
+    // tax_ids_after_fiscal_position → fiscal_position.map_tax), which reads
+    // account.tax. On a multi-company DB the active companies come from the
+    // web session, and when the order's own company isn't among them that read
+    // raises AccessError ("...try switching to the company: X") and the whole
+    // refund is refused — even though the cashier can see the order itself.
+    const context = await _orderCompanyContext(orderId);
+    const action = await _closeCallKw('pos.order', 'refund', [[Number(orderId)]], context ? { context } : {});
     let newOrderId = action?.res_id || null;
     if (!newOrderId && Array.isArray(action?.domain)) {
       const idClause = action.domain.find((d) => Array.isArray(d) && d[0] === 'id');
       if (idClause && Array.isArray(idClause[2])) newOrderId = idClause[2][0];
     }
+    // Last resort: the refund exists but the action didn't name it. Odoo 19
+    // makes pos.order.refunded_order_id NON-STORED (it can't appear in a
+    // domain), so come at it from the stored line-level link instead.
+    if (!newOrderId) {
+      try {
+        const back = await _closeCallKw(
+          'pos.order.line', 'search_read',
+          [[['refunded_orderline_id.order_id', '=', Number(orderId)]], ['order_id']],
+          { order: 'id desc', limit: 1, ...(context ? { context } : {}) },
+        );
+        const oid = back && back[0] && back[0].order_id;
+        if (Array.isArray(oid)) newOrderId = oid[0];
+      } catch (e) {
+        console.warn('[Refund] newOrderId fallback lookup failed:', e?.message);
+      }
+    }
+    console.log('[Refund] refund action →', 'res_id:', action?.res_id, '| resolved newOrderId:', newOrderId);
     return { success: true, newOrderId, action };
   } catch (e) {
-    return { error: { message: e?.message || 'Refund failed', original: e?.odoo || e } };
+    // Surface Odoo's full error: the exception class (`name`) tells a UserError
+    // apart from an AccessError / missing method, and `debug` carries the
+    // server traceback. Without these a refund failure is undiagnosable.
+    const data = e?.odoo?.data || {};
+    const detail = {
+      message: data.message || e?.message || 'Refund failed',
+      name: data.name || '',
+      debug: data.debug || '',
+    };
+    console.warn('[Refund] refund failed for order', orderId, '| name:', detail.name, '| message:', detail.message);
+    if (detail.debug) console.warn('[Refund] server traceback:', detail.debug);
+    return { error: { ...detail, original: e?.odoo || e } };
   }
 };
 
@@ -2618,21 +2787,44 @@ export const isPosSessionOpen = async ({ configId } = {}) => {
 export const isPosSessionOpenForOrder = async ({ orderId } = {}) => {
   if (!orderId) return { open: true, configName: 'POS' };
   try {
-    const rows = await _closeCallKw('pos.order', 'read', [[Number(orderId)], ['config_id']]);
+    const rows = await _closeCallKw('pos.order', 'read', [[Number(orderId)], ['config_id', 'session_id']]);
     const cfg = rows && rows[0] && rows[0].config_id;
     const configId = Array.isArray(cfg) ? cfg[0] : null;
     const configName = Array.isArray(cfg) ? cfg[1] : 'POS';
-    if (!configId) return { open: true, configName };
-    const cnt = await _closeCallKw(
-      'pos.session', 'search_count',
-      [[['config_id', '=', Number(configId)], ['state', '=', 'opened']]],
+    if (!configId) return { open: true, configName, session: null };
+    // Match Odoo's gate EXACTLY. pos.order.refund() requires
+    // `session_id.config_id.current_session_id`, whose compute is
+    //   session_ids.filtered(lambda s: s.state != 'closed' and not s.rescue)
+    // A rescue session is therefore NOT usable for a refund even though it is
+    // very much "open" — counting `state = 'opened'` (as this used to) reports
+    // open here while Odoo still raises "you need to open a session in the POS".
+    const usable = await _closeCallKw(
+      'pos.session', 'search_read',
+      [[['config_id', '=', Number(configId)], ['state', '!=', 'closed'], ['rescue', '=', false]],
+        ['id', 'name', 'state', 'rescue']],
+      { order: 'id desc', limit: 1 },
     );
-    const open = Number(cnt) > 0;
-    console.log('[Refund] session open for order', orderId, 'config', configId, configName, '→', open);
-    return { open, configName };
+    const session = (Array.isArray(usable) && usable[0]) || null;
+    const open = !!session;
+    // Non-closed sessions INCLUDING rescue ones — when this is > 0 but `open`
+    // is false, a rescue session is the reason the refund will be refused.
+    let anyNonClosed = 0;
+    try {
+      anyNonClosed = Number(await _closeCallKw(
+        'pos.session', 'search_count',
+        [[['config_id', '=', Number(configId)], ['state', '!=', 'closed']]],
+      )) || 0;
+    } catch (_) {}
+    console.log(
+      '[Refund] session check — order', orderId, '| order session', rows[0]?.session_id,
+      '| config', configId, configName, '→ usable:', open,
+      '| session:', session ? `${session.id} ${session.name} state=${session.state} rescue=${session.rescue}` : 'none',
+      '| non-closed sessions:', anyNonClosed,
+    );
+    return { open, configName, session };
   } catch (e) {
     console.warn('[Refund] session check (order) failed:', e?.message);
-    return { open: true, configName: 'POS' };
+    return { open: true, configName: 'POS', session: null };
   }
 };
 

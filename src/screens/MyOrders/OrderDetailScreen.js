@@ -191,6 +191,10 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // "Invalid Operation" popup (like Odoo) shown when the POS session is closed
   // and a return is attempted.
   const [invalidOpMsg, setInvalidOpMsg] = useState('');
+  // Title for that same popup — "Invalid Operation" for Odoo's session gate,
+  // "Refund failed" for any other server error (whose raw message we show
+  // verbatim in the card rather than truncating it into a bottom toast).
+  const [invalidOpTitle, setInvalidOpTitle] = useState('Invalid Operation');
   const { addProduct, clearProducts } = useProductStore();
   // Force-hide flag for the Return Products button on already-refunded
   // orders. Three signals feed into it:
@@ -311,11 +315,15 @@ const OrderDetailScreen = ({ navigation, route }) => {
     // Resolve the config server-side (the cached order may lack config_id) and
     // show the same "Invalid Operation" popup when it's closed.
     setRefunding(true);
-    const { open, configName } = await isPosSessionOpenForOrder({ orderId: order.id });
+    const { open, configName, session } = await isPosSessionOpenForOrder({ orderId: order.id });
     setRefunding(false);
-    console.log('[Refund] return tapped — order', order.id, '| config', configName, '| sessionOpen', open);
+    console.log(
+      '[Refund] return tapped — order', order.id, '| config', configName, '| sessionOpen', open,
+      '| session', session ? `${session.id} state=${session.state} rescue=${session.rescue}` : 'none',
+    );
     if (!open) {
-      console.log('[Refund] session closed → showing Invalid Operation popup');
+      console.log('[Refund] no usable session → showing Invalid Operation popup');
+      setInvalidOpTitle('Invalid Operation');
       setInvalidOpMsg(`To return product(s), you need to open a session in the POS ${configName}`);
       return;
     }
@@ -329,16 +337,17 @@ const OrderDetailScreen = ({ navigation, route }) => {
     setReturnConfirmVisible(false);
     if (!order) return;
     setRefunding(true);
+    console.log('[Refund] confirmed — running refund for order', order.id, '| state', order.state);
     try {
       const resp = await refundPosOrder({ orderId: order.id });
       if (resp?.error) {
         const msg = resp.error.message || '';
-        // Session-closed error → show Odoo's "Invalid Operation" popup, not a toast.
-        if (/open a session|need to open|session/i.test(msg)) {
-          setInvalidOpMsg(msg);
-        } else {
-          Toast.show({ type: 'error', text1: 'Refund failed', text2: msg || 'Try again later', position: 'bottom' });
-        }
+        console.log('[Refund] refund rejected — name:', resp.error.name || '(none)', '| message:', msg);
+        // Odoo's session gate keeps its own title; everything else is a plain
+        // failure. Either way the RAW server message is shown in the popup so
+        // it stays on screen and readable (a toast truncates and disappears).
+        setInvalidOpTitle(/need to open a session/i.test(msg) ? 'Invalid Operation' : 'Refund failed');
+        setInvalidOpMsg(msg || 'The server rejected the refund. Try again later.');
         return;
       }
       // Persist that this order has been refunded so the next visit instantly
@@ -368,7 +377,9 @@ const OrderDetailScreen = ({ navigation, route }) => {
         navigation.goBack();
       }
     } catch (e) {
-      Toast.show({ type: 'error', text1: 'Refund failed', text2: e?.message || 'Try again later', position: 'bottom' });
+      console.warn('[Refund] refund threw for order', order?.id, '—', e?.message || e);
+      setInvalidOpTitle('Refund failed');
+      setInvalidOpMsg(e?.message || 'Something went wrong. Try again later.');
     } finally {
       setRefunding(false);
     }
@@ -1062,8 +1073,10 @@ const OrderDetailScreen = ({ navigation, route }) => {
         </View>
       </Modal>
 
-      {/* Invalid Operation — session closed. Mirrors Odoo's dialog: big
-          left-aligned title, X in the corner, message, and a Close button. */}
+      {/* Refund error popup. Mirrors Odoo's dialog: big left-aligned title, X
+          in the corner, message, and a Close button. Titled "Invalid Operation"
+          for the session gate, "Refund failed" for any other server error —
+          the raw Odoo message is shown verbatim in the body either way. */}
       <Modal
         visible={!!invalidOpMsg}
         animationType="fade"
@@ -1073,7 +1086,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
         <View style={s.invalidOpBg}>
           <View style={s.invalidOpCard}>
             <View style={s.invalidOpHeader}>
-              <Text style={s.invalidOpTitle}>Invalid Operation</Text>
+              <Text style={s.invalidOpTitle}>{invalidOpTitle}</Text>
               <TouchableOpacity
                 onPress={() => setInvalidOpMsg('')}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
