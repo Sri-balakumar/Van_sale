@@ -644,6 +644,14 @@ export const submitPosOrderToOdoo = async ({
     if (l.customer_note && String(l.customer_note).trim()) {
       vals.customer_note = String(l.customer_note).trim();
     }
+    // Return line → point it at the ORIGINAL order's line. Odoo derives
+    // pos.order.refunded_order_id from this (it is computed, not stored, so it
+    // can't be written directly), which is what names the order "<original>
+    // REFUND", shows the REFUND badge, and marks the original line as returned
+    // so the same item can't be refunded twice.
+    if (l.refundedOrderlineId) {
+      vals.refunded_orderline_id = Number(l.refundedOrderlineId);
+    }
     // Always write tax_ids explicitly. The caller passes the resolved
     // Odoo tax ids per line (empty when "Without Tax" was selected). We
     // never rely on Odoo's auto-fill from product.taxes_id because
@@ -801,16 +809,31 @@ export const submitPosOrderToOdoo = async ({
   }
 
   // ── Result extraction (sync_from_ui vs create_from_ui shapes) ──────────
+  // Take the LAST entry, not the first. Odoo 19's sync_from_ui builds its
+  // result list per submitted order as:
+  //     if the lines carry refunded_orderline_id → append the ORIGINAL order id
+  //     then                                      → append the processed order id
+  // (pos_order.py `sync_from_ui`). So a refund comes back as
+  // [original_id, new_refund_id] and reading [0] hands back the order being
+  // refunded — which then gets re-paid and its stock decremented a second time.
+  // For a normal sale the list holds exactly one id, so last === first.
   let createdId = null;
   if (result && typeof result === 'object' && !Array.isArray(result) && Array.isArray(result['pos.order'])) {
     // sync_from_ui shape: { 'pos.order': [{id, ...}], 'pos.order.line': [...], 'pos.payment': [...] }
-    const first = result['pos.order'][0];
-    createdId = first?.id || null;
+    const rows = result['pos.order'];
+    const last = rows[rows.length - 1];
+    createdId = last?.id || null;
+    if (rows.length > 1) {
+      console.log('[POS submit] sync returned', rows.length, 'orders', rows.map((r) => r?.id), '→ using', createdId);
+    }
   } else if (Array.isArray(result)) {
     // create_from_ui shape: [{id, pos_reference, ...}] or [id]
-    const first = result[0];
-    if (typeof first === 'number') createdId = first;
-    else if (first && typeof first === 'object') createdId = first.id || first.pos_reference || null;
+    const last = result[result.length - 1];
+    if (typeof last === 'number') createdId = last;
+    else if (last && typeof last === 'object') createdId = last.id || last.pos_reference || null;
+    if (result.length > 1) {
+      console.log('[POS submit] sync returned', result.length, 'orders → using', createdId);
+    }
   }
 
   if (!createdId) {
@@ -952,13 +975,13 @@ export const submitPosOrderToOdoo = async ({
     console.warn('[POS submit] _create_order_picking threw:', pickErr?.message || pickErr);
   }
 
-  // Force-decrement fallback. Fires whenever no picking landed (most
+  // Force stock-adjust fallback. Fires whenever no picking landed (most
   // installs that have "Update Stock at Closing" enabled). Loops over
   // the pos.order's lines and writes the new inventory_quantity on the
   // corresponding stock.quant, then applies the adjustment so
   // qty_available reflects it immediately.
   if (pickingCountAfter === 0) {
-    console.log('[POS submit] no picking created — applying manual stock decrement fallback');
+    console.log('[POS submit] no picking created — applying manual stock adjust fallback');
     try {
       // 1. Read order lines.
       const lineResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
@@ -985,6 +1008,32 @@ export const submitPosOrderToOdoo = async ({
         lines = linesDetail.data?.result || [];
       }
 
+      // Which of these products actually track stock. Odoo keeps no quants for
+      // consumables/services, so writing them is pointless — and it's why no
+      // picking was created in the first place on an all-consumable order.
+      const storable = new Set();
+      const lineProductIds = Array.from(new Set(lines
+        .map((ln) => (Array.isArray(ln.product_id) ? ln.product_id[0] : ln.product_id))
+        .filter(Boolean)));
+      if (lineProductIds.length > 0) {
+        try {
+          const stResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
+            jsonrpc: '2.0', method: 'call',
+            params: {
+              model: 'product.product',
+              method: 'search_read',
+              args: [[['id', 'in', lineProductIds], ['is_storable', '=', true]]],
+              kwargs: { fields: ['id'] },
+            },
+          }, { headers: { 'Content-Type': 'application/json' } });
+          for (const row of (stResp.data?.result || [])) storable.add(row.id);
+        } catch (stErr) {
+          // Can't tell → fall back to adjusting everything, as before.
+          console.warn('[POS submit] is_storable lookup failed, adjusting all lines:', stErr?.message || stErr);
+          for (const id of lineProductIds) storable.add(id);
+        }
+      }
+
       // 2. Pick the first internal stock location once.
       const locResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
         jsonrpc: '2.0', method: 'call',
@@ -997,12 +1046,20 @@ export const submitPosOrderToOdoo = async ({
       }, { headers: { 'Content-Type': 'application/json' } });
       const locationId = (locResp.data?.result || [])[0]?.id || null;
       if (!locationId) {
-        console.warn('[POS submit] manual decrement skipped — no internal stock location found');
+        console.warn('[POS submit] manual stock adjust skipped — no internal stock location found');
       } else {
         for (const ln of lines) {
           const pid = Array.isArray(ln.product_id) ? ln.product_id[0] : ln.product_id;
           const qty = Number(ln.qty) || 0;
-          if (!pid || qty <= 0) continue;
+          // Refund lines carry a NEGATIVE qty. The old `qty <= 0` guard skipped
+          // them outright, so a return never put the goods back on hand. The
+          // arithmetic below already handles both directions:
+          // newQty = currentQty - qty, so qty = -1 adds one back.
+          if (!pid || qty === 0) continue;
+          if (!storable.has(pid)) {
+            console.log('[POS submit] stock adjust skipped — product', pid, 'is not storable');
+            continue;
+          }
           try {
             // Find existing quant at this location.
             const quantResp = await axios.post(`${baseUrl}/web/dataset/call_kw`, {
@@ -1052,14 +1109,14 @@ export const submitPosOrderToOdoo = async ({
                 kwargs: {},
               },
             }, { headers: { 'Content-Type': 'application/json' } });
-            console.log('[POS submit] manual decrement: product', pid, currentQty, '→', newQty, '(line qty', qty, ')');
+            console.log('[POS submit] manual stock adjust: product', pid, currentQty, '→', newQty, '(line qty', qty, ')');
           } catch (lineErr) {
-            console.warn('[POS submit] manual decrement failed for product', pid, ':', lineErr?.message || lineErr);
+            console.warn('[POS submit] manual stock adjust failed for product', pid, ':', lineErr?.message || lineErr);
           }
         }
       }
     } catch (decErr) {
-      console.warn('[POS submit] manual decrement threw:', decErr?.message || decErr);
+      console.warn('[POS submit] manual stock adjust threw:', decErr?.message || decErr);
     }
   }
 
@@ -7939,7 +7996,7 @@ export const fetchOrderLinesByIds = async (lineIds = []) => {
         model: 'pos.order.line',
         method: 'search_read',
         args: [[['id', 'in', lineIds]]],
-        kwargs: { fields: ['id','product_id','qty','price_unit','price_subtotal','price_subtotal_incl','tax_ids','discount','name'] },
+        kwargs: { fields: ['id','product_id','qty','price_unit','price_subtotal','price_subtotal_incl','tax_ids','discount','name','refunded_orderline_id'] },
       },
       id: new Date().getTime(),
     }, { headers: { 'Content-Type': 'application/json' } });
@@ -9015,7 +9072,10 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
         method: 'read',
         args: [order.lines],
         kwargs: {
-          fields: ['id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'price_subtotal_incl', 'name', 'tax_ids'],
+          // refunded_orderline_id: on a refund draft this points at the line of
+          // the ORIGINAL order. It has to survive into the cart so the paid
+          // refund order can be linked back (see submitPosOrderToOdoo).
+          fields: ['id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'price_subtotal_incl', 'name', 'tax_ids', 'refunded_orderline_id'],
         },
       },
     }, { headers: { 'Content-Type': 'application/json' } });
@@ -9069,6 +9129,12 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           price_subtotal: Number(l.price_subtotal) || 0,
           price_subtotal_incl: Number(l.price_subtotal_incl) || 0,
           tax_ids: Array.isArray(l.tax_ids) ? l.tax_ids : [],
+          // On a refund draft this points at the ORIGINAL order's line. This
+          // reshape builds an explicit object, so the field has to be carried
+          // over by hand or the paid refund order lands unlinked.
+          refunded_orderline_id: Array.isArray(l.refunded_orderline_id)
+            ? l.refunded_orderline_id[0]
+            : (l.refunded_orderline_id || null),
           // Prefer the embedded base64 (works offline / no auth header issues);
           // fall back to the Web URL if image_128 wasn't returned for this product.
           image_url: base64Url || (pid ? `${baseUrl}/web/image?model=product.product&id=${pid}&field=image_128` : null),

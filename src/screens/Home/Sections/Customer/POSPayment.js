@@ -631,6 +631,9 @@ const POSPayment = ({ navigation, route }) => {
         isReturnLine: !!p.isReturnLine,
         lockedTaxRate: p.lockedTaxRate,
         lockedTaxIds: p.lockedTaxIds,
+        // Links this return line back to the original order's line so Odoo
+        // records the item as returned (and won't allow returning it twice).
+        refundedOrderlineId: p.refundedOrderlineId || null,
       }));
       const partnerId = customer?.id || customer?._id || null;
       // The register's company, not a hard-coded 1 — on a multi-company
@@ -977,6 +980,7 @@ const POSPayment = ({ navigation, route }) => {
                   taxIds: taxIdsForLine,
                   // Keep this line's tax_ids even when With Tax is globally off.
                   lockTax: !!l.isReturnLine,
+                  refundedOrderlineId: l.refundedOrderlineId || null,
                 };
               }),
               payments: payments.map((p) => ({

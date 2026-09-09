@@ -282,6 +282,13 @@ const OrderDetailScreen = ({ navigation, route }) => {
         // The ORIGINAL tax ids so Odoo books exactly the tax paid (not the
         // product's current default, which may have changed since the sale).
         lockedTaxIds: Array.isArray(l.tax_ids) ? l.tax_ids : [],
+        // The line of the ORIGINAL order this one reverses. Paying the return
+        // creates a fresh pos.order, so without carrying this through, that
+        // order lands unlinked and Odoo never marks the original as returned
+        // (letting the same item be refunded again).
+        refundedOrderlineId: Array.isArray(l.refunded_orderline_id)
+          ? l.refunded_orderline_id[0]
+          : (l.refunded_orderline_id || null),
       });
       console.log('[RETURN TAX] return line', l.name, '| qty', l.qty, '| excl', excl, '| incl', incl, '| rate', excl ? (incl - excl) / excl : 0);
     });
