@@ -9169,6 +9169,15 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
     // (Credit) chip. Must be in the returned shape (not just in the
     // fields list) — the result object below is what callers read.
     account_move: order.account_move || false,
+    // Refund linkage. Same rule as account_move above: listing these in the
+    // `fields` array is not enough, they have to be copied into this object.
+    // Without them OrderDetailScreen's `isRefund` is permanently false, so a
+    // refund order shows no REFUND chip and still offers "Return Products" —
+    // letting a cashier refund a refund. Passed through verbatim ([id, name]
+    // from search_read) because the screen reads the name for its
+    // "Refunded from {original}" link.
+    refunded_order_id: order.refunded_order_id || false,
+    refund_orders_count: Number(order.refund_orders_count) || 0,
   };
   console.log('[POSLocation] fetchPosOrderDetailOdoo returned', {
     id: result.id,
