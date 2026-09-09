@@ -289,6 +289,9 @@ const OrderDetailScreen = ({ navigation, route }) => {
         refundedOrderlineId: Array.isArray(l.refunded_orderline_id)
           ? l.refunded_orderline_id[0]
           : (l.refunded_orderline_id || null),
+        // The full returnable quantity (negative). The register clamps the
+        // "−" stepper to this so a cashier can't return more than was sold.
+        returnMaxQty: Number(l.qty) || 0,
       });
       console.log('[RETURN TAX] return line', l.name, '| qty', l.qty, '| excl', excl, '| incl', incl, '| rate', excl ? (incl - excl) / excl : 0);
     });

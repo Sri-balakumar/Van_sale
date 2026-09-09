@@ -228,12 +228,37 @@ const TakeoutDelivery = ({ navigation, route }) => {
     }
   };
 
+  // A return line carries a NEGATIVE qty (-3 = "give three back"), so the
+  // steppers run in reverse on it: `+` returns FEWER units (toward zero) and
+  // `−` returns more, down to what was actually sold.
+  const isReturnLine = (item) => Number(item?.qty) < 0 || !!item?.rawItem?.isReturnLine;
+
+  // How far a return line may go, i.e. the quantity on the original order.
+  // openPayFlowForOrder stamps it on the cart item; fall back to the current
+  // qty so an unstamped line simply can't be pushed further.
+  const returnFloor = (item) => {
+    const stamped = Number(item?.rawItem?.returnMaxQty);
+    return Number.isFinite(stamped) ? stamped : Number(item.qty);
+  };
+
   const handleIncrement = (item) => {
-    const newQty = item.qty + 1;
+    // Stop at -1: reaching 0 used to leave a zero-quantity line sitting in the
+    // cart, which would then be submitted as an empty line. Dropping a line is
+    // what the trash icon is for.
+    const newQty = isReturnLine(item)
+      ? Math.min(-1, item.qty + 1)
+      : item.qty + 1;
     addProduct({ ...item.rawItem, quantity: newQty, qty: newQty });
   };
 
   const handleDecrement = (item) => {
+    if (isReturnLine(item)) {
+      // Previously every negative qty hit the `<= 1` guard below, so `−` wiped
+      // the whole line instead of stepping -8 → -9.
+      const newQty = Math.max(returnFloor(item), item.qty - 1);
+      addProduct({ ...item.rawItem, quantity: newQty, qty: newQty });
+      return;
+    }
     if (item.qty <= 1) {
       removeProduct(item.id);
     } else {
@@ -244,7 +269,9 @@ const TakeoutDelivery = ({ navigation, route }) => {
 
   const openQtyEditor = (item) => {
     setQtyEditFor(item);
-    setQtyDraft(String(item.qty));
+    // Show a return as a plain count ("3", not "-3") — the cashier types how
+    // many units to return and the sign is reapplied on confirm.
+    setQtyDraft(String(isReturnLine(item) ? Math.abs(item.qty) : item.qty));
   };
 
   const closeQtyEditor = () => {
@@ -255,6 +282,22 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const confirmQtyEdit = () => {
     if (!qtyEditFor) return;
     const parsed = parseInt(qtyDraft, 10);
+    if (isReturnLine(qtyEditFor)) {
+      // The old `Math.max(0, parsed)` turned a -1 return line into +1 — a SALE
+      // booked on a refund order — and confirming an untouched "-1" collapsed
+      // to 0 and deleted the line. Take the magnitude, cap it at the quantity
+      // originally sold, and put the sign back.
+      const wanted = Number.isFinite(parsed) ? Math.abs(parsed) : 0;
+      const capped = Math.min(wanted, Math.abs(returnFloor(qtyEditFor)));
+      if (capped === 0) {
+        removeProduct(qtyEditFor.id);
+      } else {
+        const n = -capped;
+        addProduct({ ...qtyEditFor.rawItem, quantity: n, qty: n });
+      }
+      closeQtyEditor();
+      return;
+    }
     const n = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
     if (n === 0) {
       removeProduct(qtyEditFor.id);
