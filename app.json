@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "NEXGENN VAN-SALE",
+    "name": "NEXGENN Van-Sale",
     "slug": "van-sale",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,12 +16,12 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "4",
+      "buildNumber": "5",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         },
-        "NSLocationWhenInUseUsageDescription": "NEXGENN VAN-SALE needs your location to record where each sale happened on the receipt."
+        "NSLocationWhenInUseUsageDescription": "NEXGENN Van-Sale needs your location to record where each sale happened on the receipt."
       }
     },
     "android": {
@@ -38,8 +38,8 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
-      "package": "com.alphalize.goldenspoon",
-      "versionCode": 4,
+      "package": "com.alphalize.vansale",
+      "versionCode": 5,
       "usesCleartextTraffic": true
     },
     "plugins": [
@@ -47,17 +47,17 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow NEXGENN VAN-SALE to use your camera to capture ID-proof photos."
+          "cameraPermission": "Allow NEXGENN Van-Sale to use your camera to capture ID-proof photos."
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "NEXGENN VAN-SALE needs your location to record where each sale happened on the receipt."
+          "locationWhenInUsePermission": "NEXGENN Van-Sale needs your location to record where each sale happened on the receipt."
         }
       ]
     ],
-    "owner": "",
+    "owner": "vavinix",
     "extra": {
       "eas": {
         "projectId": "b489c6a9-ca22-4033-b564-5a0f80542c45"

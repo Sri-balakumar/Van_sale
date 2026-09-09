@@ -13,7 +13,7 @@ import axios from 'axios';
 
 const JSONRPC_HEADERS = { 'Content-Type': 'application/json' };
 const TIMEOUT_MS = 10000; // 10 second timeout for all device API calls
-const DEFAULT_DEVICE_NAME = 'NEXGENN VAN-SALE';
+const DEFAULT_DEVICE_NAME = 'NEXGENN Van-Sale';
 
 function normalizeUrl(baseUrl = '') {
   let url = baseUrl.trim();

@@ -5,4 +5,4 @@
 import * as Device from 'expo-device';
 
 export const getDeviceName = () =>
-  Device.deviceName || Device.modelName || Device.modelId || 'NEXGENN VAN-SALE';
+  Device.deviceName || Device.modelName || Device.modelId || 'NEXGENN Van-Sale';

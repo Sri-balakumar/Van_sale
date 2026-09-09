@@ -88,7 +88,7 @@ const DeviceQRScannerScreen = () => {
         baseUrl: serverUrl,
         databaseName: parsed.d,
         deviceId: deviceUUID,
-        deviceName: deviceModel || 'NEXGENN VAN-SALE',
+        deviceName: deviceModel || 'NEXGENN Van-Sale',
         recordId: parsed.rid || null,
       });
 

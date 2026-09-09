@@ -1,6 +1,6 @@
 {
-  "name": "golden-spoon-vegetables",
-  "version": "1.5.0",
+  "name": "van-sale",
+  "version": "1.5.1",
   "main": "node_modules/expo/AppEntry.js",
   "type": "commonjs",
   "scripts": {
