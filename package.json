@@ -71,6 +71,7 @@
     "react-native-toast-message": "^2.2.0",
     "react-native-web": "~0.19.6",
     "react-native-webview": "13.6.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zustand": "^4.5.1"
   },
   "devDependencies": {
