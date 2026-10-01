@@ -296,6 +296,11 @@ const CustomerInfo = ({ navigation, route }) => {
       // write isn't blocked by the (possibly missing) custom binary
       // fields. We only send the side(s) that actually changed.
       const proofTargetId = isNew ? resp?.id || resp?.result : partnerId;
+      // A screen that opened this form to create a customer (e.g. Opening
+      // Balance) gets the new partner back to select it.
+      const notifyCreated = () => {
+        if (isNew && proofTargetId) route?.params?.onSaved?.({ id: proofTargetId, name: data.name });
+      };
       if (proofTargetId && (idProofChanged.front || idProofChanged.back)) {
         const proofVals = {};
         if (idProofChanged.front) proofVals.id_proof_front = form.id_proof_front;
@@ -308,6 +313,7 @@ const CustomerInfo = ({ navigation, route }) => {
             text2: 'ID proof not saved — fields not configured on this Odoo',
             position: 'bottom',
           });
+          notifyCreated();
           navigation.goBack();
           return;
         }
@@ -322,6 +328,7 @@ const CustomerInfo = ({ navigation, route }) => {
           : (resp?.partial ? 'Contact saved (some fields skipped)' : 'Contact updated'),
         position: 'bottom',
       });
+      notifyCreated();
       navigation.goBack();
     } catch (e) {
       Toast.show({ type: 'error', text1: 'Save failed', text2: e?.message || '', position: 'bottom' });
