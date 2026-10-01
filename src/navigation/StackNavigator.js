@@ -31,6 +31,7 @@ import CreateInvoicePreview from '@screens/Home/Sections/Customer/CreateInvoiceP
 import InvoicesListScreen from '../screens/Accounting/InvoicesListScreen';
 import JournalEntriesListScreen from '../screens/Accounting/JournalEntriesListScreen';
 import PartnerLedgerScreen from '../screens/Accounting/PartnerLedgerScreen';
+import { OpeningBalanceScreen } from '../screens/OpeningBalance';
 import InvoiceDetailScreen from '../screens/Accounting/InvoiceDetailScreen';
 import { InventoryDetails, InventoryForm, InventoryScreen } from "@screens/Home/Options/Inventory";
 import { ProductDetail } from "@components/common/Detail";
@@ -200,6 +201,11 @@ const StackNavigator = () => {
       <Stack.Screen
         name="PartnerLedgerScreen"
         component={PartnerLedgerScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="OpeningBalanceScreen"
+        component={OpeningBalanceScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

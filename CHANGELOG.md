@@ -12,6 +12,23 @@ build.
 
 ## [Unreleased]
 
+### Added
+- **Opening Balance tile (Accounting).** Enter old customers' credit balances
+  from the paper records, by age (0–30, 31–60, 61–90, 91–120, >120 days), and
+  post them without anyone opening the web backend.
+  - The customer picker shows the customer list straight away and filters as
+    you type. "Create <name>" opens the customer form, and the new customer
+    comes back selected.
+  - Entries are kept on the phone until they're published.
+  - **Publish** asks for the admin's login password, which the server checks;
+    it's never stored. The app then builds the same Excel file the accountants
+    used to upload and runs it through the existing opening-balance import. It
+    checks every line before importing and posts the journal entry.
+  - If the server doesn't answer, Retry picks up where the publish stopped and
+    never posts twice.
+  - If the server doesn't have the opening-balance module, the screen says so
+    and Publish is disabled.
+
 ## [1.5.1] - 2026-09-09
 
 ### Fixed

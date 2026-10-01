@@ -82,6 +82,9 @@ const SECTIONS = [
       { id: 'invoices', title: 'Invoices', screen: 'InvoicesListScreen', featureKey: 'home.tile.invoices', icon: 'description', bg: '#E7F1FD', accent: '#1E88E5' },
       { id: 'journal_entries', title: 'Journal Entries', screen: 'JournalEntriesListScreen', featureKey: 'home.tile.journal_entries', icon: 'account-balance', bg: '#F3E5F5', accent: '#7B2D8E' },
       { id: 'partner_ledger', title: 'Partner Ledger', screen: 'PartnerLedgerScreen', featureKey: 'home.tile.partner_ledger', icon: 'people', bg: '#EEF2FF', accent: '#4F46E5' },
+      // Not requiresAdmin: salesmen enter the balances; publishing them asks
+      // for the admin password.
+      { id: 'opening_balance', title: 'Opening Balance', screen: 'OpeningBalanceScreen', featureKey: 'home.tile.opening_balance', icon: 'account-balance-wallet', bg: '#ECFDF5', accent: '#059669' },
     ],
   },
   {
