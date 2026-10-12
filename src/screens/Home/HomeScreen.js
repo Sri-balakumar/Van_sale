@@ -85,6 +85,7 @@ const SECTIONS = [
       // Not requiresAdmin: salesmen enter the balances; publishing them asks
       // for the admin password.
       { id: 'opening_balance', title: 'Opening Balance', screen: 'OpeningBalanceScreen', featureKey: 'home.tile.opening_balance', icon: 'account-balance-wallet', bg: '#ECFDF5', accent: '#059669' },
+      { id: 'payment_receipts', title: 'Payment Receipts', screen: 'CustomerPaymentsListScreen', featureKey: 'home.tile.payment_receipts', icon: 'payments', bg: '#FDF2F8', accent: '#DB2777' },
     ],
   },
   {

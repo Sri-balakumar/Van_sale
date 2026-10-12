@@ -32,6 +32,7 @@ import InvoicesListScreen from '../screens/Accounting/InvoicesListScreen';
 import JournalEntriesListScreen from '../screens/Accounting/JournalEntriesListScreen';
 import PartnerLedgerScreen from '../screens/Accounting/PartnerLedgerScreen';
 import { OpeningBalanceScreen } from '../screens/OpeningBalance';
+import { CustomerPaymentsListScreen, CustomerPaymentFormScreen } from '../screens/CustomerPayments';
 import InvoiceDetailScreen from '../screens/Accounting/InvoiceDetailScreen';
 import { InventoryDetails, InventoryForm, InventoryScreen } from "@screens/Home/Options/Inventory";
 import { ProductDetail } from "@components/common/Detail";
@@ -206,6 +207,16 @@ const StackNavigator = () => {
       <Stack.Screen
         name="OpeningBalanceScreen"
         component={OpeningBalanceScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="CustomerPaymentsListScreen"
+        component={CustomerPaymentsListScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="CustomerPaymentFormScreen"
+        component={CustomerPaymentFormScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen
