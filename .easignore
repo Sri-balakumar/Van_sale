@@ -1,0 +1,38 @@
+# What EAS Build leaves out of the upload. When this file exists EAS uses it
+# INSTEAD of .gitignore, so the .gitignore rules are repeated here.
+#
+# Needed because the project path contains an apostrophe (APK's), which breaks
+# EAS's git clone step — builds run with EAS_NO_VCS=1 and pack the folder
+# directly using this file:
+#   $env:EAS_NO_VCS=1; eas build --profile preview --platform android
+
+# ── same as .gitignore ──
+node_modules/
+.expo/
+dist/
+web-build/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+*.pem
+.env*.local
+*.tsbuildinfo
+assets_for_manual/
+
+# ── not needed to build the app ──
+.git/
+.claude/
+.vscode/
+screenshots/
+documents/
+odoo modules/
+packagescommented/
+project_structure.txt
