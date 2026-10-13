@@ -12,6 +12,24 @@ build.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-13
+
+### Added
+- **Payment Receipts tile (Accounting).** Take customer payments from the phone.
+  - **Credit Customers** lists everyone who owes money, with their due, last
+    payment and any draft total. Tap a customer to take a receipt.
+  - The form has the same fields as the server's customer payment form. Payment
+    Type is fixed to Receive, and the amount can't be more than the customer's
+    due. Journal and payment method open in a centered picker, and the
+    customer's payment history is listed below the form.
+  - **Save Draft** keeps the receipt as a draft. **Confirm** asks you to
+    double-check, reads the due again and posts the payment.
+  - Leaving with unsaved changes asks whether to Save or Discard.
+  - **Draft** and **Done** tabs list the receipts in each state.
+
+### Changed
+- App builds now run on the new EAS project.
+
 ## [1.6.0] - 2026-10-05
 
 ### Added
