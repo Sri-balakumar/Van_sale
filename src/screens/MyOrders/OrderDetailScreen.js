@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -20,7 +20,7 @@ import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import Text from '@components/Text';
 import { COLORS, FONT_FAMILY } from '@constants/theme';
-import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, refundPosOrder, countRefundsForOrder, markOrderAsRefunded, isOrderMarkedRefunded, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder, fetchPartnerOutstandingOdoo, fetchOrderDueSnapshotOdoo, fetchPartnerOpenInvoicesOdoo } from '@api/services/generalApi';
+import { fetchPosOrderDetailOdoo, fetchPosOrderPaymentsOdoo, fetchPosOrderSignaturesOdoo, resolveInvoiceHtml, fetchAppPaperSize, isPosSessionOpenForOrder, fetchPartnerOutstandingOdoo, fetchOrderDueSnapshotOdoo, fetchPartnerOpenInvoicesOdoo } from '@api/services/generalApi';
 import { formatCurrency } from '@utils/currency';
 import { generateInvoiceHtml, extractOrderRef, printPageSize } from '@utils/invoiceHtml';
 import useAuthStore from '@stores/auth/useAuthStore';
@@ -209,39 +209,6 @@ const OrderDetailScreen = ({ navigation, route }) => {
   // verbatim in the card rather than truncating it into a bottom toast).
   const [invalidOpTitle, setInvalidOpTitle] = useState('Invalid Operation');
   const { addProduct, clearProducts } = useProductStore();
-  // Force-hide flag for the Return Products button on already-refunded
-  // orders. Three signals feed into it:
-  //  1. Local AsyncStorage marker — instant truth if we created the refund
-  //     from this app (independent of Odoo round-trip reliability).
-  //  2. pos.order.refunded_order_id count (Odoo 17+ link).
-  //  3. pos.order.line.refunded_orderline_id count (older Odoo line-level link).
-  // Any one of these turning truthy hides the button.
-  const [refundDetected, setRefundDetected] = useState(false);
-
-  // Multi-source refund detection: local AsyncStorage marker first (instant,
-  // works even if Odoo can't read the link back), then server-side counts
-  // at both order- and line-level. Any positive signal flips refundDetected
-  // → true and hides the Return Products button.
-  useEffect(() => {
-    if (!order?.id) { setRefundDetected(false); return; }
-    let alive = true;
-    (async () => {
-      try {
-        const localMarked = await isOrderMarkedRefunded(order.id);
-        if (!alive) return;
-        if (localMarked) { setRefundDetected(true); return; }
-        const orderLineIds = Array.isArray(order.lines)
-          ? order.lines.map((l) => l?.id).filter(Boolean)
-          : [];
-        const n = await countRefundsForOrder({ orderId: order.id, lineIds: orderLineIds });
-        if (alive && Number(n) > 0) setRefundDetected(true);
-      } catch (_) {
-        // Soft-fail: leave refundDetected as-is rather than flipping back to
-        // false on a transient network error.
-      }
-    })();
-    return () => { alive = false; };
-  }, [order?.id, order?.lines]);
 
   // True when this order is itself a refund of another order — drives the
   // small red REFUND chip + "Refunded from {original}" link near the header.
@@ -249,14 +216,21 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const refundedOriginalId = isRefund ? (Array.isArray(order.refunded_order_id) ? order.refunded_order_id[0] : order.refunded_order_id) : null;
   const refundedOriginalName = isRefund && Array.isArray(order.refunded_order_id) ? order.refunded_order_id[1] : '';
 
+  // What is still returnable on each line: sold qty minus what earlier returns
+  // already took back (Odoo's refunded_qty). A partly returned order keeps the
+  // rest available, so the cashier can return the remaining items later.
+  const remainingReturnQty = (l) => (Number(l?.qty) || 0) - (Number(l?.refunded_qty) || 0);
+  const returnableLines = Array.isArray(order?.lines)
+    ? order.lines.filter((l) => remainingReturnQty(l) > 0)
+    : [];
+
   // Whether Return Products is allowed on this order. Disabled when:
   // - the order is itself a refund (no re-refunding a refund),
-  // - the order has already been fully refunded once (`refund_orders_count > 0`),
+  // - every line has already been returned,
   // - or the order isn't in a "paid"/"done"/"invoiced" state.
   const canRefund = order
     && !isRefund
-    && !refundDetected
-    && (Number(order.refund_orders_count) || 0) === 0
+    && returnableLines.length > 0
     && ['paid', 'done', 'invoiced'].includes(order.state);
 
   // Refund orders are created as unpaid drafts. "Payment" loads the refund
@@ -265,8 +239,8 @@ const OrderDetailScreen = ({ navigation, route }) => {
   const isUnpaidRefund = isRefund && order?.state === 'draft';
 
   // Load an order's lines into the cart and open the register/pay screen
-  // (same path as resuming a draft from the Orders list). Used both by the
-  // refund-order Payment button and right after a return is created.
+  // (same path as resuming a draft from the Orders list). Used by the Payment
+  // button on an unpaid return draft (older returns were saved as drafts).
   const openPayFlowForOrder = (ord) => {
     if (!ord) return;
     clearProducts();
@@ -278,7 +252,8 @@ const OrderDetailScreen = ({ navigation, route }) => {
       const excl = Number(l.price_subtotal) || 0;
       const incl = Number(l.price_subtotal_incl) || 0;
       addProduct({
-        id: l.product_id,
+        // One cart row per line, so two lines of the same product don't merge.
+        id: `ret_${l.id}`,
         remoteId: l.product_id,
         name: l.name,
         price: l.price_unit,
@@ -323,6 +298,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
       existingOrderId: ord.id,
       existingOrderRef: ord.pos_reference || '',
       userName: ord.user?.name || '',
+      customer: ord.partner ? { id: ord.partner.id, name: ord.partner.name } : null,
       isRefund: true,   // so the register shows Payment (not Place Order)
     });
   };
@@ -332,13 +308,18 @@ const OrderDetailScreen = ({ navigation, route }) => {
     openPayFlowForOrder(order);
   };
 
+  // The usable POS session found when Return Products was tapped. The return
+  // is booked on it at Payment (Odoo puts a return in the config's CURRENT
+  // session, which may be newer than the original order's).
+  const returnSessionRef = useRef(null);
+
   const handleReturnProducts = async () => {
     if (!order || !canRefund || refunding) return;
     // Odoo requires an OPEN session on the order's POS to return products.
     // Resolve the config server-side (the cached order may lack config_id) and
     // show the same "Invalid Operation" popup when it's closed.
     setRefunding(true);
-    const { open, configName, session } = await isPosSessionOpenForOrder({ orderId: order.id });
+    const { open, configName, configId, session } = await isPosSessionOpenForOrder({ orderId: order.id });
     setRefunding(false);
     console.log(
       '[Refund] return tapped — order', order.id, '| config', configName, '| sessionOpen', open,
@@ -350,57 +331,76 @@ const OrderDetailScreen = ({ navigation, route }) => {
       setInvalidOpMsg(`To return product(s), you need to open a session in the POS ${configName}`);
       return;
     }
+    returnSessionRef.current = { session, configId, configName };
     setReturnConfirmVisible(true);
   };
 
-  // Confirm step from the styled popup. Runs the refund RPC and bounces back
-  // to the Orders list (which refreshes on focus) rather than navigating to
-  // the new refund order, per the user's UX request.
+  // Confirm step from the styled popup. Builds the return in the CART only and
+  // opens the register. Nothing is created on the server until Payment, which
+  // books exactly the lines left in the cart. (Creating Odoo's full refund
+  // draft here, as before, meant lines deleted in the register stayed on the
+  // server and every product ended up returned.)
   const confirmReturnProducts = async () => {
     setReturnConfirmVisible(false);
     if (!order) return;
     setRefunding(true);
-    console.log('[Refund] confirmed — running refund for order', order.id, '| state', order.state);
+    console.log('[Refund] confirmed — building return cart for order', order.id, '| state', order.state);
     try {
-      const resp = await refundPosOrder({ orderId: order.id });
-      if (resp?.error) {
-        const msg = resp.error.message || '';
-        console.log('[Refund] refund rejected — name:', resp.error.name || '(none)', '| message:', msg);
-        // Odoo's session gate keeps its own title; everything else is a plain
-        // failure. Either way the RAW server message is shown in the popup so
-        // it stays on screen and readable (a toast truncates and disappears).
-        setInvalidOpTitle(/need to open a session/i.test(msg) ? 'Invalid Operation' : 'Refund failed');
-        setInvalidOpMsg(msg || 'The server rejected the refund. Try again later.');
+      // Re-read the order so refunded_qty reflects returns made since this
+      // screen loaded (e.g. from another device).
+      const fresh = await fetchPosOrderDetailOdoo(order.id);
+      const src = (fresh && !fresh.error && Array.isArray(fresh.lines)) ? fresh : order;
+      const lines = (src.lines || []).filter((l) => remainingReturnQty(l) > 0);
+      if (lines.length === 0) {
+        setInvalidOpTitle('Nothing to return');
+        setInvalidOpMsg('Every product on this order has already been returned.');
         return;
       }
-      // Persist that this order has been refunded so the next visit instantly
-      // hides Return Products, even if Odoo's read-back is unreliable.
-      try { await markOrderAsRefunded(order.id); } catch (_) {}
-      setRefundDetected(true);
-      Toast.show({
-        type: 'success',
-        text1: 'Products returned',
-        text2: 'Refund order created — ready for payment.',
-        position: 'bottom',
+      clearProducts();
+      lines.forEach((l) => {
+        const remaining = remainingReturnQty(l);
+        const soldQty = Number(l.qty) || 0;
+        // Original line totals (positive). Return at the NET unit price the
+        // customer actually paid (after line discount), and lock the tax rate
+        // the line was sold with.
+        const excl = Number(l.price_subtotal) || 0;
+        const incl = Number(l.price_subtotal_incl) || 0;
+        const netUnit = soldQty ? excl / soldQty : (Number(l.price_unit) || 0);
+        const rate = excl ? (incl - excl) / excl : 0;
+        addProduct({
+          // One cart row per ORIGINAL line (two lines of the same product must
+          // not merge). remoteId carries the real product id for the server.
+          id: `ret_${l.id}`,
+          remoteId: l.product_id,
+          name: l.name,
+          price: netUnit,
+          price_unit: netUnit,
+          quantity: -remaining,
+          qty: -remaining,
+          image_url: l.image_url || null,
+          isReturnLine: true,
+          lockedTaxRate: rate,
+          lockedTaxAmount: -(incl - excl) * (soldQty ? remaining / soldQty : 1),
+          lockedTaxIds: Array.isArray(l.tax_ids) ? l.tax_ids : [],
+          // Links the return line to the line it reverses, so Odoo records it
+          // as returned and won't let it be returned twice.
+          refundedOrderlineId: l.id,
+          // The "−" stepper can't go past what is still returnable.
+          returnMaxQty: -remaining,
+        });
       });
-      // The refund order now exists in the Orders list (a real pos.order). Take
-      // the cashier straight into the register/pay screen loaded with it (like
-      // Odoo), so they can pay out the return immediately.
-      console.log('[Refund] refund created for order', order.id, '→ newOrderId', resp.newOrderId);
-      if (resp.newOrderId) {
-        const newDetail = await fetchPosOrderDetailOdoo(resp.newOrderId);
-        if (newDetail && !newDetail.error) {
-          openPayFlowForOrder(newDetail);
-        } else {
-          console.log('[Refund] could not load refund order → going back to list');
-          navigation.goBack();
-        }
-      } else {
-        console.log('[Refund] no newOrderId returned → going back to list');
-        navigation.goBack();
-      }
+      const target = returnSessionRef.current || {};
+      console.log('[Refund] return cart ready | lines', lines.length, '| session', target.session?.id, '| config', target.configId);
+      navigation.navigate('TakeoutDelivery', {
+        sessionId: target.session?.id ?? src.session?.id ?? null,
+        registerId: target.configId ?? src.config?.id ?? null,
+        registerName: target.configName || src.config?.name || '',
+        userName: src.user?.name || '',
+        customer: src.partner ? { id: src.partner.id, name: src.partner.name } : null,
+        isRefund: true,   // so the register shows Payment (not Place Order)
+      });
     } catch (e) {
-      console.warn('[Refund] refund threw for order', order?.id, '—', e?.message || e);
+      console.warn('[Refund] could not build return for order', order?.id, '—', e?.message || e);
       setInvalidOpTitle('Refund failed');
       setInvalidOpMsg(e?.message || 'Something went wrong. Try again later.');
     } finally {
@@ -1075,7 +1075,7 @@ const OrderDetailScreen = ({ navigation, route }) => {
             </View>
             <Text style={s.returnConfirmTitle}>Return Products?</Text>
             <Text style={s.returnConfirmText}>
-              {`A new refund order will be created for ${order?.name || 'this order'} with negative quantities and shown in the Orders list, ready for payment.`}
+              {`The products from ${order?.name || 'this order'} that can still be returned will open in the register. Remove the ones the customer is keeping, then tap Payment to save the return.`}
             </Text>
             <View style={s.returnConfirmBtnRow}>
               <TouchableOpacity

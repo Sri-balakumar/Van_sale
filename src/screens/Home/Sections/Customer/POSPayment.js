@@ -913,6 +913,18 @@ const POSPayment = ({ navigation, route }) => {
             if (delResp?.error) {
               push(`delete pre-existing: err ${delResp.error?.message || ''}`);
               console.warn('[POSFinalize] discard draft warning:', delResp.error?.message || delResp.error);
+              if (isRefund) {
+                // The draft is a full return. If it stays, Odoo counts every
+                // one of its lines as returned, so booking this return too
+                // would return products twice. Stop here instead.
+                Toast.show({
+                  type: 'error',
+                  text1: 'Return not saved',
+                  text2: 'Could not remove the earlier return draft. Try again.',
+                  position: 'bottom',
+                });
+                return;
+              }
             } else {
               push('delete pre-existing: ok');
             }
@@ -993,7 +1005,7 @@ const POSPayment = ({ navigation, route }) => {
               amountTax: taxAmount,
               amountPaid: totalPaymentAmount,
               amountReturn: Math.max(0, paidAmount - total),
-              toInvoice: invoiceChecked && Boolean(customer && (customer.id || customer._id)),
+              toInvoice: !isRefund && invoiceChecked && Boolean(customer && (customer.id || customer._id)),
               companyId,
               withTax: withTaxMode,
             });
@@ -1072,7 +1084,9 @@ const POSPayment = ({ navigation, route }) => {
             // Invoices REQUIRE a partner — Odoo rejects with "partnerId is
             // required" otherwise. So we only invoice when both the
             // checkbox is on AND a customer is attached.
-            const shouldCreateInvoice = invoiceChecked && Boolean(customer && (customer.id || customer._id));
+            // Not for a return: a negative out_invoice can't be posted (returns now
+            // carry the original customer, so this would otherwise fire).
+            const shouldCreateInvoice = !isRefund && invoiceChecked && Boolean(customer && (customer.id || customer._id));
               push(`shouldCreateInvoice: ${shouldCreateInvoice} (invoiceChecked=${invoiceChecked}, customer=${customer?.id || customer?._id || 'none'})`);
               console.log('[INVOICE FLOW] shouldCreateInvoice=', shouldCreateInvoice,
                 'invoiceChecked=', invoiceChecked,

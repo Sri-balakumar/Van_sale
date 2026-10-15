@@ -550,11 +550,16 @@ export const captureAndStoreOrderLocation = async (orderId) => {
 export const deletePosOrderOdoo = async (orderId) => {
   if (!orderId) return { result: true };
   const url = `${getOdooUrl()}/web/dataset/call_kw`;
+  // Run with the ORDER's company active (same as refundPosOrder). Otherwise a
+  // draft booked on another company is invisible to the call, both unlink and
+  // cancel fail, and a leftover refund draft keeps every line "returned".
+  const context = await _orderCompanyContext(orderId);
+  const kwargs = context ? { context } : {};
   try {
     const resp = await axios.post(url, {
       jsonrpc: '2.0',
       method: 'call',
-      params: { model: 'pos.order', method: 'unlink', args: [[Number(orderId)]], kwargs: {} },
+      params: { model: 'pos.order', method: 'unlink', args: [[Number(orderId)]], kwargs },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (!resp.data?.error) return { result: true };
     console.warn('[POS] unlink draft failed, falling back to state=cancel:', resp.data.error?.data?.message || resp.data.error);
@@ -565,7 +570,7 @@ export const deletePosOrderOdoo = async (orderId) => {
     const resp = await axios.post(url, {
       jsonrpc: '2.0',
       method: 'call',
-      params: { model: 'pos.order', method: 'write', args: [[Number(orderId)], { state: 'cancel' }], kwargs: {} },
+      params: { model: 'pos.order', method: 'write', args: [[Number(orderId)], { state: 'cancel' }], kwargs },
     }, { headers: { 'Content-Type': 'application/json' } });
     if (resp.data?.error) return { error: resp.data.error };
     return { result: true };
@@ -2919,7 +2924,7 @@ export const isPosSessionOpenForOrder = async ({ orderId } = {}) => {
       '| session:', session ? `${session.id} ${session.name} state=${session.state} rescue=${session.rescue}` : 'none',
       '| non-closed sessions:', anyNonClosed,
     );
-    return { open, configName, session };
+    return { open, configName, configId, session };
   } catch (e) {
     console.warn('[Refund] session check (order) failed:', e?.message);
     return { open: true, configName: 'POS', session: null };
@@ -9127,7 +9132,9 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           // refunded_orderline_id: on a refund draft this points at the line of
           // the ORIGINAL order. It has to survive into the cart so the paid
           // refund order can be linked back (see submitPosOrderToOdoo).
-          fields: ['id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'price_subtotal_incl', 'name', 'tax_ids', 'refunded_orderline_id'],
+          // refunded_qty: how much of this line has already been returned, so
+          // Return Products only offers what is still left.
+          fields: ['id', 'product_id', 'qty', 'price_unit', 'discount', 'price_subtotal', 'price_subtotal_incl', 'name', 'tax_ids', 'refunded_orderline_id', 'refunded_qty'],
         },
       },
     }, { headers: { 'Content-Type': 'application/json' } });
@@ -9187,6 +9194,7 @@ export const fetchPosOrderDetailOdoo = async (orderId) => {
           refunded_orderline_id: Array.isArray(l.refunded_orderline_id)
             ? l.refunded_orderline_id[0]
             : (l.refunded_orderline_id || null),
+          refunded_qty: Number(l.refunded_qty) || 0,
           // Prefer the embedded base64 (works offline / no auth header issues);
           // fall back to the Web URL if image_128 wasn't returned for this product.
           image_url: base64Url || (pid ? `${baseUrl}/web/image?model=product.product&id=${pid}&field=image_128` : null),

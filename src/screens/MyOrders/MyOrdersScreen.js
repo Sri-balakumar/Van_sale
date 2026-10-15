@@ -287,6 +287,13 @@ const MyOrdersScreen = ({ navigation, route }) => {
           base.lockedTaxRate = excl ? (incl - excl) / excl : 0;
           base.lockedTaxAmount = incl - excl;
           base.lockedTaxIds = Array.isArray(l.tax_ids) ? l.tax_ids : [];
+          // One cart row per line, so two lines of the same product don't merge.
+          base.id = `ret_${l.id}`;
+          // Keep the link to the ORIGINAL order's line. Without it the paid
+          // return lands unlinked and the original never shows as returned.
+          base.refundedOrderlineId = l.refunded_orderline_id || null;
+          // The "−" stepper can't return more than this draft holds.
+          base.returnMaxQty = Number(l.qty) || 0;
           console.log('[RETURN TAX] (list) return line', l.name, '| qty', l.qty, '| excl', excl, '| incl', incl, '| rate', excl ? (incl - excl) / excl : 0);
         }
         addProduct(base);
@@ -305,6 +312,7 @@ const MyOrdersScreen = ({ navigation, route }) => {
         existingOrderId: item.id,
         existingOrderRef: item.pos_reference || detail.pos_reference || '',
         userName: detail.user?.name || '',
+        customer: (isRefundOrder && detail.partner) ? { id: detail.partner.id, name: detail.partner.name } : null,
         isRefund: isRefundOrder,
       });
     } catch (e) {

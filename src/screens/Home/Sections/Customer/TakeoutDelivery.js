@@ -54,9 +54,12 @@ const TakeoutDelivery = ({ navigation, route }) => {
   // and it navigates here with this param. We treat it the same as a
   // just-created draft.
   const existingOrderId = route?.params?.existingOrderId || null;
-  // Refund flow (from Return Products): the order already exists, so the CTA is
+  // Refund flow (from Return Products): the cart holds the return, so the CTA is
   // "Payment" (pay out the return), not "Place Order".
   const isRefundFlow = route?.params?.isRefund || false;
+  // "How to return" hint on the return register: starts closed, a tap opens
+  // it and it stays open until tapped again. Not remembered between returns.
+  const [returnHintOpen, setReturnHintOpen] = useState(false);
   const [discountModalVisible, setDiscountModalVisible] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [customDiscountInput, setCustomDiscountInput] = useState('');
@@ -71,7 +74,9 @@ const TakeoutDelivery = ({ navigation, route }) => {
   const [editingPreset, setEditingPreset] = useState(null);
   const [addName, setAddName] = useState('');
   const [addAmount, setAddAmount] = useState('');
-  const [customer, setCustomer] = useState(null);
+  // Return Products passes the original order's customer so the return is
+  // booked against the same partner.
+  const [customer, setCustomer] = useState(route?.params?.customer || null);
   const [lineDiscountInput, setLineDiscountInput] = useState('');
   // Mockup-style discount popup toggles. Default to "items" (the
   // cashier opened it by tapping a specific row) + "amount" (matches
@@ -426,6 +431,21 @@ const TakeoutDelivery = ({ navigation, route }) => {
     const sessionId = route?.params?.sessionId;
     const posConfigId = route?.params?.registerId;
 
+    // A return built in the cart (Return Products) has no server draft and
+    // must not get one: Payment submits exactly the lines left in the cart.
+    if (isRefundFlow && !existingOrderId) {
+      navigation.navigate('POSPayment', {
+        orderId: null,
+        sessionId,
+        registerId: posConfigId,
+        totalAmount: finalTotal,
+        products: cart,
+        discountAmount: discountApplied,
+        customer,
+      });
+      return;
+    }
+
     // Already saved this exact cart? Reuse the draft. No new orderId.
     let orderId = activeDraftId;
     if (!orderId) {
@@ -669,6 +689,43 @@ const TakeoutDelivery = ({ navigation, route }) => {
                 Delete
               </Text>
             </TouchableOpacity>
+          </View>
+        )}
+        {/* Return lines run "backwards" (+ returns fewer, 🗑 keeps the item),
+            so the return register carries a tap-to-open explainer. */}
+        {isRefundFlow && items.length > 0 && (
+          <View style={{
+            marginHorizontal: 12,
+            marginTop: 12,
+            backgroundColor: '#FEF3C7',
+            borderColor: '#FDE68A',
+            borderWidth: 1,
+            borderRadius: 12,
+          }}>
+            <TouchableOpacity
+              onPress={() => setReturnHintOpen((v) => !v)}
+              activeOpacity={0.7}
+              style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 }}
+            >
+              <MaterialIcons name="info-outline" size={18} color="#92400E" />
+              <Text style={{ flex: 1, marginLeft: 8, fontSize: 14, fontWeight: '800', color: '#92400E' }}>How to return</Text>
+              <MaterialIcons name={returnHintOpen ? 'keyboard-arrow-up' : 'keyboard-arrow-down'} size={24} color="#92400E" />
+            </TouchableOpacity>
+            {returnHintOpen && (
+              <View style={{ paddingHorizontal: 14, paddingBottom: 12 }}>
+                <Text style={{ fontSize: 13, color: '#92400E', marginBottom: 4 }}>
+                  <Text style={{ fontWeight: '900' }}>−</Text>  Return more{'      '}
+                  <Text style={{ fontWeight: '900' }}>+</Text>  Return fewer
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                  <MaterialIcons name="delete-outline" size={16} color="#b91c1c" />
+                  <Text style={{ fontSize: 13, color: '#92400E', marginLeft: 4 }}>Customer keeps it (not returned)</Text>
+                </View>
+                <Text style={{ fontSize: 13, color: '#92400E' }}>
+                  Only the items left here are returned when you tap Payment.
+                </Text>
+              </View>
+            )}
           </View>
         )}
         <FlatList
