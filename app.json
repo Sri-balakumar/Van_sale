@@ -2,7 +2,7 @@
   "expo": {
     "name": "NEXGENN Van-Sale",
     "slug": "van-sale",
-    "version": "1.7.0",
+    "version": "1.7.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,7 +16,7 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "7",
+      "buildNumber": "8",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
@@ -39,7 +39,7 @@
         "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "package": "com.alphalize.vansale",
-      "versionCode": 7,
+      "versionCode": 8,
       "usesCleartextTraffic": true
     },
     "plugins": [

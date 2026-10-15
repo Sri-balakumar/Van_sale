@@ -12,6 +12,26 @@ build.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-10-15
+
+### Added
+- **"How to return" hint on the return register.** A yellow bar at the top of
+  the return screen opens to explain the buttons: − returns more, + returns
+  fewer, and delete means the customer keeps the product.
+
+### Fixed
+- **Return Products returned every product.** Deleting some products in the
+  register before tapping Payment still returned the whole order. Return
+  Products now only fills the register, and Payment saves just the products
+  left on screen. Backing out saves nothing.
+- **Return the rest later.** Return Products stays available while any product
+  on the order hasn't been returned yet, and offers only those products.
+- **Returns use the price the customer paid** (after line discount) and keep
+  the original customer.
+- **Older return drafts.** Paying one from the Orders list now links it to the
+  original sale, and Payment stops with an error if an old draft can't be
+  removed instead of saving a second return.
+
 ## [1.7.0] - 2026-10-13
 
 ### Added
