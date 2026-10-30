@@ -77,6 +77,10 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
   const [showDynSultanate, setShowDynSultanate] = useState(true);
   const [showDynVat, setShowDynVat] = useState(true);
   const [showDynNameAr, setShowDynNameAr] = useState(true);
+  // Dynamic invoice customer lines: off = name + mobile, on = also address /
+  // VAT / email. `null` = the server module is too old to have the setting,
+  // so the switch is hidden and never sent.
+  const [showDynCustomerDetails, setShowDynCustomerDetails] = useState(null);
   // Preview modal
   const [previewHtml, setPreviewHtml] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -170,6 +174,7 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
         setShowDynSultanate(s.show_dyn_sultanate !== false);
         setShowDynVat(s.show_dyn_vat !== false);
         setShowDynNameAr(s.show_dyn_name_ar !== false);
+        setShowDynCustomerDetails('show_dyn_customer_details' in s ? !!s.show_dyn_customer_details : null);
         setAddress(s.address || '');
         setPhone(s.phone || '');
         setEmail(s.email || '');
@@ -248,6 +253,7 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
     show_dyn_sultanate: !!showDynSultanate,
     show_dyn_vat: !!showDynVat,
     show_dyn_name_ar: !!showDynNameAr,
+    ...(showDynCustomerDetails !== null ? { show_dyn_customer_details: !!showDynCustomerDetails } : {}),
     address: address || false,
     phone: phone || false,
     email: email || false,
@@ -608,6 +614,13 @@ const InvoiceSettingsScreen = ({ navigation, route }) => {
           <Row label="Show GSM / Mobile" value={showDynGsm} onValueChange={setShowDynGsm} />
 
           <Row label="Show Sultanate of Oman" value={showDynSultanate} onValueChange={setShowDynSultanate} />
+
+          {showDynCustomerDetails !== null ? (
+            <>
+              <Row label="Show full customer details" value={showDynCustomerDetails} onValueChange={setShowDynCustomerDetails} />
+              <Text style={styles.toggleHelp}>Off: customer name and mobile only. On: also address, VAT number and email.</Text>
+            </>
+          ) : null}
         </View>
 
         {/* Logo */}

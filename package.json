@@ -1,6 +1,6 @@
 {
   "name": "van-sale",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "main": "node_modules/expo/AppEntry.js",
   "type": "commonjs",
   "scripts": {

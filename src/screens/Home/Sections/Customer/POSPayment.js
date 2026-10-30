@@ -13,6 +13,7 @@ import {
   fetchPartnerIdProofOdoo,
   fetchPartnerOutstandingOdoo,
   captureOrderDueOdoo,
+  writeOrderDueAdjustedOdoo,
   updatePosOrderSignaturesOdoo,
   submitPosOrderToOdoo,
   getCurrentDeviceLocation,
@@ -28,6 +29,7 @@ import {
   fetchPosCompanyId,
   getActiveCompanyId,
 } from '@api/services/generalApi';
+import { saveCustomerPayment, confirmCustomerPayment, fetchInboundPaymentMethods } from '@api/services/customerPaymentsApi';
 import { IdProofCards } from '@components/IdProof';
 import { SignatureCapturePopup, SignatureCards } from '@components/Signature';
 // react-native-modal — used here for the ID-proof popup so it animates
@@ -224,6 +226,12 @@ const POSPayment = ({ navigation, route }) => {
       });
     return () => { alive = false; };
   }, [customer?.id, customer?._id]);
+  // Cash over the bill while the customer has an old due: the cashier picks
+  // 'adjust' (the extra goes to the old due) or 'change' (handed back).
+  // null = not chosen yet, which blocks Validate. Cleared whenever the
+  // payment mode or customer changes so a stale choice never carries over.
+  const [excessChoice, setExcessChoice] = useState(null);
+  useEffect(() => { setExcessChoice(null); }, [paymentMode, customer?.id, customer?._id]);
   const [selectedJournal, setSelectedJournal] = useState(null);
   const [paying, setPaying] = useState(false);
 
@@ -1004,7 +1012,11 @@ const POSPayment = ({ navigation, route }) => {
               amountTotal: total,
               amountTax: taxAmount,
               amountPaid: totalPaymentAmount,
-              amountReturn: Math.max(0, paidAmount - total),
+              // Cash: only what is handed back (Adjust with Due keeps the rest
+              // for the old due). Card never gives change.
+              amountReturn: (paymentMode === 'cash' || paymentMode === 'card')
+                ? changeToReturn
+                : Math.max(0, paidAmount - total),
               toInvoice: !isRefund && invoiceChecked && Boolean(customer && (customer.id || customer._id)),
               companyId,
               withTax: withTaxMode,
@@ -1310,6 +1322,47 @@ const POSPayment = ({ navigation, route }) => {
                   console.log('[INVOICE RESULT]', { error: invErr?.message || String(invErr) });
                 }
               }
+
+            // Adjust with Due: the money taken over the bill goes to the
+            // customer's old due as a customer payment, the same record the
+            // Payment Receipts tile posts, on the journal of the method that
+            // took it. Then the order is told how much, so the receipt's
+            // balance section shows it. The sale itself is already saved, so a
+            // failure here only warns: the cashier records it from Payment
+            // Receipts instead.
+            if (dueAdjustAmount > 0 && createdOrderId && partnerId) {
+              const adjMethod = paymentMode === 'card' ? cardMethod : cashMethod;
+              const adjJournalId = Array.isArray(adjMethod?.journal_id) ? adjMethod.journal_id[0] : adjMethod?.journal_id;
+              try {
+                const methodLines = adjJournalId ? await fetchInboundPaymentMethods(adjJournalId) : [];
+                const methodLineId = methodLines?.[0]?.id;
+                if (!adjJournalId || !methodLineId) {
+                  throw new Error(`no incoming payment method on the ${paymentMode} journal`);
+                }
+                const adjPaymentId = await saveCustomerPayment({
+                  partnerId,
+                  amount: dueAdjustAmount,
+                  date: new Date().toISOString().slice(0, 10),
+                  memo: `Old due paid with ${posReference || `POS order ${createdOrderId}`}`,
+                  journalId: adjJournalId,
+                  methodLineId,
+                });
+                await confirmCustomerPayment(adjPaymentId);
+                push(`adjustDue: ${dueAdjustAmount} posted as payment ${adjPaymentId}`);
+                const marked = await writeOrderDueAdjustedOdoo({ orderId: createdOrderId, amount: dueAdjustAmount, paymentId: adjPaymentId });
+                push(`adjustDue: order field ${marked ? 'written' : 'not written (older server module)'}`);
+              } catch (adjErr) {
+                push(`adjustDue: err ${adjErr?.message || adjErr}`);
+                console.warn('[ADJUST DUE] failed:', adjErr);
+                Toast.show({
+                  type: 'error',
+                  text1: 'Old due not updated',
+                  text2: `${displayNum(dueAdjustAmount)} was taken but not put towards the old due. Record it from Payment Receipts.`,
+                  position: 'bottom',
+                  visibilityTime: 6000,
+                });
+              }
+            }
           }
         } catch (e) {
           push(`INNER CATCH (post-submit): ${e?.message || e}`);
@@ -1430,6 +1483,22 @@ const POSPayment = ({ navigation, route }) => {
     (isRefund ? roundMoney(paidAmount) > roundMoney(total)
               : roundMoney(paidAmount) < roundMoney(total));
 
+  // Money taken over the bill and where it goes. Cash: the cashier chooses
+  // Adjust with Due (up to the old due; anything above that is change) or
+  // Return as Change. Card: there is no change, so the extra always goes to
+  // the old due and may not be more than it. Split / Credit never go over.
+  const previousDue = (customer && outstanding.loaded) ? Math.max(0, roundMoney(outstanding.amount)) : 0;
+  const excessAmount = (!isRefund && (paymentMode === 'cash' || paymentMode === 'card'))
+    ? Math.max(0, roundMoney(paidAmount - total))
+    : 0;
+  const canAdjustDue = excessAmount > 0 && previousDue > 0;
+  const needsExcessChoice = paymentMode === 'cash' && canAdjustDue && !excessChoice;
+  const dueAdjustAmount = !canAdjustDue ? 0
+    : (paymentMode === 'card' || excessChoice === 'adjust') ? Math.min(excessAmount, previousDue)
+    : 0;
+  const changeToReturn = paymentMode === 'card' ? 0 : roundMoney(excessAmount - dueAdjustAmount);
+  const cardOverLimit = paymentMode === 'card' && excessAmount > previousDue;
+
   // Credit (Customer Account) needs a customer — applies whether the
   // cashier picked Credit as the single payment mode or as one slot of a
   // split. Used to disable Validate / Split Confirm up front and to drive
@@ -1503,6 +1572,24 @@ const POSPayment = ({ navigation, route }) => {
       }
     } else if (amountInsufficient) {
       setAmountModalVisible(true);
+      return;
+    } else if (cardOverLimit) {
+      Toast.show({
+        type: 'error',
+        text1: 'Card amount too high',
+        text2: previousDue > 0
+          ? `Card can be at most ${displayNum(total + previousDue)} (bill + old due).`
+          : "Card can't be more than the bill. This customer has no old due.",
+        position: 'bottom',
+      });
+      return;
+    } else if (needsExcessChoice) {
+      Toast.show({
+        type: 'info',
+        text1: 'Extra cash',
+        text2: 'Choose Adjust with Due or Return as Change.',
+        position: 'bottom',
+      });
       return;
     }
     if (!customer) {
@@ -1763,7 +1850,23 @@ const POSPayment = ({ navigation, route }) => {
               </View>
 
               <View style={styles.statusPillRow}>
-                {(isRefund ? remaining < 0 : remaining > 0) ? (
+                {paymentMode === 'card' && excessAmount > 0 ? (
+                  cardOverLimit ? (
+                    <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
+                      <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
+                      <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
+                        {previousDue > 0 ? `Max ${displayNum(total + previousDue)} (bill + old due)` : 'More than the bill'}
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={[styles.statusPill, { backgroundColor: '#FFF7ED', borderColor: '#FED7AA' }]}>
+                      <MaterialIcons name="account-balance-wallet" size={14} color="#9A3412" />
+                      <Text style={[styles.statusPillText, { color: '#9A3412' }]}>
+                        To old due {displayNum(dueAdjustAmount)}
+                      </Text>
+                    </View>
+                  )
+                ) : (isRefund ? remaining < 0 : remaining > 0) ? (
                   <View style={[styles.statusPill, { backgroundColor: '#fee2e2', borderColor: '#fecaca' }]}>
                     <MaterialIcons name="error-outline" size={14} color="#b91c1c" />
                     <Text style={[styles.statusPillText, { color: '#b91c1c' }]}>
@@ -1774,7 +1877,7 @@ const POSPayment = ({ navigation, route }) => {
                   <View style={[styles.statusPill, { backgroundColor: '#dcfce7', borderColor: '#bbf7d0' }]}>
                     <MaterialCommunityIcons name="cash-multiple" size={14} color="#15803d" />
                     <Text style={[styles.statusPillText, { color: '#15803d' }]}>
-                      Change {displayNum(Math.abs(remaining))}
+                      {canAdjustDue ? `Extra ${displayNum(excessAmount)}` : `Change ${displayNum(Math.abs(remaining))}`}
                     </Text>
                   </View>
                 ) : (
@@ -1784,6 +1887,38 @@ const POSPayment = ({ navigation, route }) => {
                   </View>
                 )}
               </View>
+
+              {/* Cash over the bill + an old due: where does the extra go? */}
+              {paymentMode === 'cash' && canAdjustDue ? (
+                <View style={styles.excessBox}>
+                  <View style={styles.excessChoiceRow}>
+                    {[
+                      { key: 'adjust', label: 'Adjust with Due', icon: 'account-balance-wallet' },
+                      { key: 'change', label: 'Return as Change', icon: 'payments' },
+                    ].map((opt) => {
+                      const active = excessChoice === opt.key;
+                      return (
+                        <TouchableOpacity
+                          key={opt.key}
+                          onPress={() => setExcessChoice(opt.key)}
+                          activeOpacity={0.8}
+                          style={[styles.excessChoiceBtn, active && styles.excessChoiceBtnActive]}
+                        >
+                          <MaterialIcons name={opt.icon} size={16} color={active ? '#fff' : NAVY} />
+                          <Text style={[styles.excessChoiceText, active && styles.excessChoiceTextActive]}>{opt.label}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                  <Text style={styles.excessNote}>
+                    {excessChoice === 'adjust'
+                      ? `${displayNum(dueAdjustAmount)} goes to the old due${changeToReturn > 0 ? `, change ${displayNum(changeToReturn)}` : ''}. Old due left ${displayNum(previousDue - dueAdjustAmount)}.`
+                      : excessChoice === 'change'
+                        ? `Give back ${displayNum(changeToReturn)}. Old due stays ${displayNum(previousDue)}.`
+                        : `Extra ${displayNum(excessAmount)}: put it towards the old due of ${displayNum(previousDue)}, or give it back?`}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           ) : null}
 
@@ -2826,6 +2961,20 @@ const styles = StyleSheet.create({
   },
   statusPillText: {
     fontSize: 11, fontFamily: FONT_FAMILY.urbanistBold, marginLeft: 3,
+  },
+  // Adjust with Due / Return as Change, under the cash amount.
+  excessBox: { marginTop: 8 },
+  excessChoiceRow: { flexDirection: 'row', gap: 8 },
+  excessChoiceBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 8, borderRadius: 10, borderWidth: 1.5, borderColor: NAVY, backgroundColor: '#fff',
+  },
+  excessChoiceBtnActive: { backgroundColor: NAVY },
+  excessChoiceText: { fontSize: 12, fontFamily: FONT_FAMILY.urbanistBold, color: NAVY },
+  excessChoiceTextActive: { color: '#fff' },
+  excessNote: {
+    marginTop: 6, fontSize: 12, color: '#9A3412', textAlign: 'center',
+    fontFamily: FONT_FAMILY.urbanistBold,
   },
 
   // Keypad — compact

@@ -106,7 +106,7 @@ eas build -p android --profile preview4     # internal distribution
 eas build -p android --profile production
 ```
 
-Current release: **v1.7.1**, Android package `com.alphalize.vansale`.
+Current release: **v1.7.2**, Android package `com.alphalize.vansale`.
 
 **When bumping a version, edit both `package.json` and `app.json`** so they stay in sync, and bump
 `expo.android.versionCode` (integer) and `expo.ios.buildNumber` (string) for every store-bound

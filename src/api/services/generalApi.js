@@ -1517,6 +1517,38 @@ export const captureOrderDueOdoo = async ({ orderId } = {}) => {
   }
 };
 
+// Record how much of this order's payment went to the customer's OLD due
+// (Adjust with Due / card over the bill). The Dynamic receipt reads it for its
+// balance section. Fails soft (false) on a server whose pos_dynamic_invoice is
+// older than 19.0.32.0.0 and has no such field — the payment itself is
+// already posted by then, only the receipt figures lag.
+export const writeOrderDueAdjustedOdoo = async ({ orderId, amount, paymentId = null } = {}) => {
+  if (!orderId) return false;
+  try {
+    const resp = await axios.post(`${getOdooUrl()}/web/dataset/call_kw`, {
+      jsonrpc: '2.0',
+      method: 'call',
+      params: {
+        model: 'pos.order',
+        method: 'write',
+        args: [[Number(orderId)], {
+          due_adjusted_amount: Number(amount) || 0,
+          ...(paymentId ? { due_adjusted_payment_id: Number(paymentId) } : {}),
+        }],
+        kwargs: {},
+      },
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    if (resp.data?.error) {
+      console.warn('[ORDER DUE] due_adjusted write error:', resp.data.error?.data?.message || resp.data.error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('writeOrderDueAdjustedOdoo exception:', e?.message || e);
+    return false;
+  }
+};
+
 // Read the frozen snapshot back for Orders History.
 //
 // Deliberately a SEPARATE read rather than four more names in
@@ -5280,6 +5312,25 @@ const INVOICE_SETTINGS_FIELDS = [
   // Per-field show/hide toggles for the Dynamic invoice header.
   'show_dyn_cr', 'show_dyn_gsm', 'show_dyn_sultanate', 'show_dyn_vat', 'show_dyn_name_ar',
 ];
+// Fields added in newer module versions. Read only when the server has them, so
+// the settings screen still loads against a server whose module isn't upgraded.
+const INVOICE_SETTINGS_OPTIONAL_FIELDS = ['show_dyn_customer_details'];
+
+// read/search_read the settings, dropping the optional fields when the server
+// rejects them as unknown (older pos_dynamic_invoice).
+const _readInvoiceSettings = async (method, args, kwargs = {}) => {
+  const withOptional = [...INVOICE_SETTINGS_FIELDS, ...INVOICE_SETTINGS_OPTIONAL_FIELDS];
+  const call = (fields) => (method === 'read'
+    ? _invSettingsKw('pos.invoice.settings', 'read', [...args, fields])
+    : _invSettingsKw('pos.invoice.settings', 'search_read', args, { ...kwargs, fields }));
+  try {
+    return await call(withOptional);
+  } catch (err) {
+    if (!/invalid field|show_dyn_customer_details/i.test(err?.message || '')) throw err;
+    console.warn('[DynInvoice] server module is older, reading settings without', INVOICE_SETTINGS_OPTIONAL_FIELDS);
+    return call(INVOICE_SETTINGS_FIELDS);
+  }
+};
 
 const _invSettingsKw = async (model, method, args = [], kwargs = {}) => {
   const resp = await axios.post(
@@ -5300,12 +5351,12 @@ export const fetchInvoiceSettings = async (recordId = null) => {
   try {
     let rows;
     if (recordId) {
-      rows = await _invSettingsKw('pos.invoice.settings', 'read', [[Number(recordId)], INVOICE_SETTINGS_FIELDS]);
+      rows = await _readInvoiceSettings('read', [[Number(recordId)]]);
     } else {
-      rows = await _invSettingsKw('pos.invoice.settings', 'search_read', [[]], { fields: INVOICE_SETTINGS_FIELDS, limit: 1 });
+      rows = await _readInvoiceSettings('search_read', [[]], { limit: 1 });
       if (!rows || rows.length === 0) {
         const newId = await _invSettingsKw('pos.invoice.settings', 'create', [{}]);
-        rows = await _invSettingsKw('pos.invoice.settings', 'read', [[Number(newId)], INVOICE_SETTINGS_FIELDS]);
+        rows = await _readInvoiceSettings('read', [[Number(newId)]]);
       }
     }
     const rec = rows && rows[0];
