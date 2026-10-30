@@ -136,6 +136,11 @@ class PosInvoiceSettings(models.Model):
         help='Show the Arabic company name (shared with the Cash Memo) above '
              'the company name on the Dynamic invoice header.',
     )
+    show_dyn_customer_details = fields.Boolean(
+        string='Show Full Customer Details', default=False,
+        help='Dynamic invoice: off = customer name + mobile only; on = also '
+             'the customer address, VAT number and email.',
+    )
 
     # --- Default receipt size (applies to BOTH the dynamic and the normal
     # receipt) ---

@@ -246,9 +246,219 @@
         <t t-elif="d['invoice_template'] == 'cash_memo'">
             <t t-call="pos_dynamic_invoice.report_pos_dynamic_invoice_cash_memo_doc"/>
         </t>
+        <t t-elif="d['invoice_template'] == 'dynamic'">
+            <t t-call="pos_dynamic_invoice.report_pos_dynamic_invoice_compact_doc"/>
+        </t>
         <t t-else="">
             <t t-call="pos_dynamic_invoice.report_pos_dynamic_invoice_standard_doc"/>
         </t>
+    </template>
+
+    <!-- Compact Dynamic receipt: thermal-bill style (no boxes, 2mm margin,
+         tight rows), two lines per item with Qty / Rate / Total / Vat / Amount,
+         and an English + Arabic balance section at the end. Used ONLY for the
+         'dynamic' template; Standard (normal mode) keeps standard_doc above.
+         Pure #000, inline style, base64 images (the app print path loads no
+         assets). Same context as the other templates: d, width,
+         page_size_css, sig_max_h. -->
+    <template id="report_pos_dynamic_invoice_compact_doc">
+        <t t-set="cw" t-value="max(10, width - 4)"/>
+        <div t-attf-class="pdc_root#{' narrow' if width &lt;= 58 else (' sheet' if width &gt;= 148 else '')}">
+            <style>
+                @page { size: <t t-esc="page_size_css"/>; margin: 2mm; }
+                .pdc_root .rc { width:<t t-esc="cw"/>mm; max-width:100%; margin:0 auto; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; font-size:10.5px; line-height:1.25; color:#000; direction:ltr; }
+                .pdc_root.narrow .rc { font-size:8.5px; }
+                .pdc_root.sheet .rc { font-size:11.5px; }
+                .pdc_root i { font-style:normal; font-size:0.85em; }
+                .pdc_root .hd { text-align:center; }
+                .pdc_root .hd .logo { width:40%; height:auto; display:block; margin:0 auto 2px; }
+                .pdc_root .hd .nm { font-weight:700; font-size:1.25em; }
+                .pdc_root .hd .ar { direction:rtl; }
+                .pdc_root .ttl { text-align:center; font-weight:700; font-size:1.15em; margin:5px 0 3px; }
+                /* display:table rows: label left / value right on ONE line in
+                   every engine, incl. wkhtmltopdf's old WebKit. */
+                .pdc_root .pr { display:table; width:100%; padding:1px 0; }
+                .pdc_root .pr > span { display:table-cell; vertical-align:top; }
+                .pdc_root .pr > span:first-child { white-space:nowrap; }
+                .pdc_root .pr > span:last-child { text-align:right; padding-left:6px; }
+                .pdc_root .pr.wrap > span:first-child { white-space:normal; }
+                .pdc_root .pr.num > span:last-child { white-space:nowrap; }
+                .pdc_root table.it { width:100%; border-collapse:collapse; margin-top:4px; }
+                .pdc_root table.it th { font-weight:700; padding:2px 1px; text-align:right; border-top:1px solid #000; border-bottom:1px solid #000; line-height:1.1; }
+                .pdc_root table.it th span { display:block; font-weight:400; font-size:0.82em; }
+                .pdc_root table.it th.q, .pdc_root table.it td.q { text-align:left; }
+                .pdc_root table.it tr.n td { padding:3px 1px 0; font-weight:700; }
+                .pdc_root table.it tr.n .code { float:right; font-weight:400; padding-left:6px; }
+                .pdc_root table.it tr.a td { padding:0 1px; direction:rtl; text-align:right; }
+                .pdc_root table.it tr.nt td { padding:0 1px; font-size:0.85em; font-style:italic; }
+                .pdc_root table.it tr.v td { padding:0 1px 3px; text-align:right; border-bottom:1px dotted #000; white-space:nowrap; direction:ltr; }
+                .pdc_root table.it tr.v td.q { text-align:left; }
+                .pdc_root .tot { margin-top:4px; }
+                .pdc_root .net { font-weight:700; font-size:1.15em; border-top:1px solid #000; border-bottom:1px solid #000; margin-top:2px; padding:2px 0; }
+                .pdc_root .sum { margin-top:5px; border-top:1px solid #000; border-bottom:1px solid #000; padding:2px 0; }
+                .pdc_root .sum .bal { font-weight:700; font-size:1.1em; border-top:1px dotted #000; margin-top:2px; padding-top:3px; }
+                .pdc_root .pay { margin-top:4px; border-bottom:1px dotted #000; padding-bottom:2px; }
+                .pdc_root .sig { display:table; width:100%; margin-top:6px; direction:ltr; }
+                .pdc_root .sig > div { display:table-cell; width:50%; text-align:center; padding:0 4px; vertical-align:bottom; }
+                .pdc_root .sig .ln { border-top:1px solid #000; margin-top:2px; padding-top:1px; font-size:0.9em; }
+                .pdc_root .ft { text-align:center; margin-top:4px; font-size:0.95em; }
+            </style>
+            <div class="rc">
+                <!-- Letterhead: plain centred lines, no box. -->
+                <div class="hd">
+                    <t t-if="d['show_logo'] and d['logo']">
+                        <img class="logo" t-att-src="'data:image/png;base64,' + d['logo']"/>
+                    </t>
+                    <t t-if="d.get('show_dyn_name_ar') and d['company_name_ar']">
+                        <div class="nm ar"><t t-esc="d['company_name_ar']"/></div>
+                    </t>
+                    <div class="nm"><t t-esc="d['company']['name']"/></div>
+                    <t t-foreach="d['company']['address_lines']" t-as="addr_line">
+                        <div><t t-esc="addr_line"/></div>
+                    </t>
+                    <t t-if="d.get('show_dyn_sultanate')"><div>Sur-Sultanate of Oman</div></t>
+                    <t t-if="d.get('show_dyn_vat') and d['vat_number']"><div>VATIN  <t t-esc="d['vat_number']"/></div></t>
+                    <t t-if="d.get('show_dyn_cr') and d['cr_number']"><div>C.R. No  <t t-esc="d['cr_number']"/></div></t>
+                    <t t-if="d.get('show_dyn_gsm') and d['gsm_mobile']"><div>GSM  <t t-esc="d['gsm_mobile']"/></div></t>
+                    <t t-elif="d['company']['phone']"><div>Tel  <t t-esc="d['company']['phone']"/></div></t>
+                    <t t-if="d['company']['email']"><div><t t-esc="d['company']['email']"/></div></t>
+                </div>
+
+                <div class="ttl"><t t-esc="d['header_title']"/></div>
+
+                <!-- Invoice + customer lines. Customer name + mobile always;
+                     address / VAT / email only with "Show Full Customer
+                     Details" on. -->
+                <div class="pr"><span>Invoice No <i>(رقم الفاتورة)</i></span><span><t t-esc="d['order_ref']"/></span></div>
+                <div class="pr"><span>Invoice Date <i>(التاريخ)</i></span><span><t t-esc="d.get('datetime') or d['date']"/></span></div>
+                <div class="pr"><span>Cashier <i>(الكاشير)</i></span><span><t t-esc="d['cashier']"/></span></div>
+                <t t-if="d['customer']">
+                    <div class="pr"><span>Customer <i>(الزبون)</i></span><span><t t-esc="d['customer']"/></span></div>
+                    <t t-if="d.get('customer_mobile')">
+                        <div class="pr"><span>Mobile <i>(الجوال)</i></span><span><t t-esc="d['customer_mobile']"/></span></div>
+                    </t>
+                    <t t-if="d.get('show_dyn_customer_details')">
+                        <t t-if="d.get('customer_address_lines')">
+                            <div class="pr"><span>Address <i>(العنوان)</i></span><span>
+                                <t t-foreach="d['customer_address_lines']" t-as="caddr"><div><t t-esc="caddr"/></div></t>
+                            </span></div>
+                        </t>
+                        <t t-if="d.get('customer_vat')">
+                            <div class="pr"><span>VATIN <i>(الرقم الضريبي)</i></span><span><t t-esc="d['customer_vat']"/></span></div>
+                        </t>
+                        <t t-if="d.get('customer_email')">
+                            <div class="pr"><span>Email <i>(البريد)</i></span><span><t t-esc="d['customer_email']"/></span></div>
+                        </t>
+                    </t>
+                </t>
+
+                <!-- Items: name + code, Arabic name, note, then the numbers. -->
+                <table class="it">
+                    <thead>
+                        <tr>
+                            <th class="q">Qty<span>الكمية</span></th>
+                            <th>Rate<span>السعر</span></th>
+                            <th>Total<span>الإجمالي</span></th>
+                            <th>Vat<span>الضريبة</span></th>
+                            <th>Amount<span>المبلغ</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <t t-foreach="d['items']" t-as="item">
+                            <tr class="n">
+                                <td colspan="5">
+                                    <t t-if="item.get('code')"><span class="code"><t t-esc="item['code']"/></span></t>
+                                    <t t-esc="item['num']"/>. <t t-esc="item.get('name_c') or item['name']"/>
+                                    <t t-if="item['disc_f'] != '0'"> <i>(Disc <t t-esc="item['disc_f']"/>)</i></t>
+                                </td>
+                            </tr>
+                            <t t-if="item.get('name_ar')">
+                                <tr class="a"><td colspan="5"><t t-esc="item['name_ar']"/></td></tr>
+                            </t>
+                            <t t-if="item['note']">
+                                <tr class="nt"><td colspan="5"><t t-esc="item['note']"/></td></tr>
+                            </t>
+                            <tr class="v">
+                                <td class="q"><t t-esc="item.get('qty_f') or item['qty']"/></td>
+                                <td><t t-esc="item.get('rate_n') or item['unit_f']"/></td>
+                                <td><t t-esc="item.get('excl_n') or ''"/></td>
+                                <td><t t-esc="item.get('vat_n') or ''"/></td>
+                                <td><t t-esc="item.get('amount_n') or item['total_f']"/></td>
+                            </tr>
+                        </t>
+                    </tbody>
+                </table>
+
+                <div class="tot">
+                    <t t-if="d['show_discount']">
+                        <div class="pr num"><span>Discount <i>(خصم)</i></span><span><t t-esc="d['discount_n']"/></span></div>
+                    </t>
+                    <div class="pr num"><span>Total W/O Vat <i>(المجموع بدون ضريبة)</i></span><span><t t-esc="d['untaxed_n']"/></span></div>
+                    <t t-if="d['show_tax']">
+                        <div class="pr num"><span>Vat<t t-if="d.get('vat_rate_label')"> <t t-esc="d['vat_rate_label']"/></t> <i>(الضريبة)</i></span><span><t t-esc="d['tax_n']"/></span></div>
+                    </t>
+                    <t t-if="d.get('show_refunded') and d.get('refunded_f')">
+                        <div class="pr num"><span>Refunded <i>(المسترد)</i></span><span>-<t t-esc="d['refunded_f']"/></span></div>
+                    </t>
+                    <div class="pr num net"><span>Net Amount <i>(الصافي)</i></span><span><t t-esc="d['total_f']"/></span></div>
+                </div>
+
+                <!-- Balance section (bills with a customer). Walk-in sales and
+                     refunds print their payment rows instead. -->
+                <t t-if="d.get('show_balance_summary')">
+                    <div class="sum">
+                        <div class="pr wrap num"><span>Today Bill Total / <i>إجمالي فاتورة اليوم</i></span><span><t t-esc="d['bill_total_n']"/></span></div>
+                        <div class="pr wrap num"><span>Previous Outstanding / <i>الرصيد السابق</i></span><span><t t-esc="d['prev_due_n']"/></span></div>
+                        <div class="pr wrap num"><span>Total Amount / <i>المبلغ الإجمالي</i></span><span><t t-esc="d['grand_due_n']"/></span></div>
+                        <div class="pr wrap num"><span>Paying Amount<t t-if="d.get('paying_label')"> (<t t-esc="d['paying_label']"/>)</t> / <i>المبلغ المدفوع</i></span><span><t t-esc="d['paying_n']"/></span></div>
+                        <t t-if="d.get('show_paid_change')">
+                            <div class="pr wrap num"><span>Change / <i>الباقي</i></span><span><t t-esc="d['change_n']"/></span></div>
+                        </t>
+                        <div class="pr wrap num bal"><span>Balance Due / <i>الرصيد المستحق</i></span><span><t t-esc="d['balance_f']"/></span></div>
+                    </div>
+                </t>
+                <t t-else="">
+                    <div class="pay">
+                        <t t-if="d['has_payments']">
+                            <t t-foreach="d['payments']" t-as="pay">
+                                <div class="pr num"><span><t t-esc="pay['name']"/></span><span><t t-esc="pay['amount_f']"/></span></div>
+                            </t>
+                            <t t-if="d['show_change']">
+                                <div class="pr num"><span>Change <i>(الباقي)</i></span><span><t t-esc="d['change_f']"/></span></div>
+                            </t>
+                        </t>
+                        <t t-else="">
+                            <div class="pr num"><span>Cash</span><span><t t-esc="d['cash_f']"/></span></div>
+                        </t>
+                    </div>
+                </t>
+
+                <t t-if="d['show_customer_sig'] or d['show_shop_owner_sig']">
+                    <div class="sig">
+                        <t t-if="d['show_customer_sig']">
+                            <div>
+                                <img t-att-src="'data:image/png;base64,' + d['customer_signature']" t-attf-style="width:100%; height:auto; max-height:#{sig_max_h}px; object-fit:contain;"/>
+                                <div class="ln">Customer / العميل</div>
+                            </div>
+                        </t>
+                        <t t-if="d['show_shop_owner_sig']">
+                            <div>
+                                <img t-att-src="'data:image/png;base64,' + d['shop_owner_signature']" t-attf-style="width:100%; height:auto; max-height:#{sig_max_h}px; object-fit:contain;"/>
+                                <div class="ln">Cashier / الكاشير</div>
+                            </div>
+                        </t>
+                    </div>
+                </t>
+
+                <t t-if="d['show_footer']">
+                    <div class="ft">
+                        <t t-foreach="d['footer_lines']" t-as="fline">
+                            <div><t t-esc="fline"/></div>
+                        </t>
+                    </div>
+                </t>
+            </div>
+        </div>
     </template>
 
     <!-- Cash Memo: bilingual (English/Arabic) Oman invoice, auto-filled from the

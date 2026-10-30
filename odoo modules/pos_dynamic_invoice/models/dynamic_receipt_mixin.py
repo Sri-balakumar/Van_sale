@@ -56,6 +56,23 @@ class DynamicReceiptMixin(models.AbstractModel):
         """
         return True
 
+    def _receipt_paid_now(self):
+        """Money taken for THIS bill: {'paid', 'change', 'label'}. `paid` never
+        exceeds the bill; anything over it is `change`. `label` names the
+        payment methods for the Paying Amount line ('' when unknown)."""
+        self.ensure_one()
+        return {'paid': max(0.0, self._receipt_amount_paid()), 'change': 0.0, 'label': ''}
+
+    def _receipt_due_adjusted(self):
+        """Part of this payment applied to the customer's OLDER invoices."""
+        return 0.0
+
+    def _receipt_due_adjusted_booked(self):
+        """How much of `_receipt_due_adjusted` has already reduced the
+        customer's receivable (and so must be added back to show the balance
+        from before this visit)."""
+        return self._receipt_due_adjusted()
+
     def _receipt_excluded_move(self):
         """The move to leave OUT of the customer's previous due.
 
@@ -83,6 +100,58 @@ class DynamicReceiptMixin(models.AbstractModel):
             return ('%s %s' % (symbol, text)) if symbol else text
 
         return _fmt
+
+    def _receipt_number_formatter(self):
+        """Return fn(amount) -> '0.000': the currency's decimals, no symbol.
+        The compact Dynamic receipt prints plain numbers in its columns."""
+        currency = self.currency_id or self.company_id.currency_id
+        digits = currency.decimal_places if currency else 2
+
+        def _num(amount):
+            try:
+                value = float(amount or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            return ('{:.%df}' % digits).format(value)
+
+        return _num
+
+    def _receipt_arabic_lang(self):
+        """Code of the first active Arabic language ('ar_001', ...), or ''
+        when Arabic is not turned on, in which case no Arabic names print."""
+        lang = self.env['res.lang'].sudo().search(
+            [('active', '=', True), ('code', '=like', 'ar%')], limit=1)
+        return lang.code or ''
+
+    @staticmethod
+    def _receipt_product_code(product):
+        """Internal reference, else barcode, else ''."""
+        if not product:
+            return ''
+        return product.default_code or product.barcode or ''
+
+    @staticmethod
+    def _receipt_short_name(name, code):
+        """Drop a leading '[CODE] ' from a display name; the compact receipt
+        prints the code on the right of the line instead."""
+        prefix = '[%s] ' % code if code else ''
+        return name[len(prefix):] if prefix and name.startswith(prefix) else name
+
+    @staticmethod
+    def _receipt_product_name_ar(product, ar_lang):
+        """The product name translated to Arabic, or '' when there is no
+        Arabic language or no translation (Odoo then returns the English)."""
+        if not product or not ar_lang:
+            return ''
+        name_ar = product.with_context(lang=ar_lang).name or ''
+        name_en = product.with_context(lang='en_US').name or ''
+        return name_ar if name_ar and name_ar != name_en else ''
+
+    @staticmethod
+    def _receipt_vat_rate_label(taxes):
+        """'5%' when every taxed line uses the same percent tax, else ''."""
+        rates = {tax.amount for tax in taxes if tax.amount_type == 'percent' and tax.amount}
+        return ('%g%%' % rates.pop()) if len(rates) == 1 else ''
 
     @staticmethod
     def _extract_order_ref(order_name, order_id):
@@ -229,6 +298,50 @@ class DynamicReceiptMixin(models.AbstractModel):
             p for p in [getattr(partner, 'street', ''), getattr(partner, 'street2', ''), getattr(partner, 'city', '')] if p
         ) if partner else ''
 
+        # Compact Dynamic receipt: customer lines. Name + mobile always; the
+        # rest only when "Show Full Customer Details" is on (see below).
+        data['show_dyn_customer_details'] = settings.show_dyn_customer_details
+        mobile = ''
+        if partner:
+            if 'mobile' in partner._fields:
+                mobile = partner.mobile or ''
+            mobile = mobile or partner.phone or ''
+        data['customer_mobile'] = mobile
+        data['customer_address_lines'] = [
+            line for line in [
+                partner.street, partner.street2,
+                ' '.join(p for p in [
+                    ', '.join(p for p in [partner.city, partner.state_id.name if partner.state_id else ''] if p),
+                    partner.zip or '',
+                ] if p),
+                partner.country_id.name if partner.country_id else '',
+            ] if line
+        ] if partner else []
+        data['customer_vat'] = (partner.vat or '') if partner else ''
+        data['customer_email'] = (partner.email or '') if partner else ''
+
+        # Compact Dynamic receipt: balance section. Previous Outstanding is the
+        # balance from BEFORE this visit, so whatever this payment put towards
+        # old invoices is added back onto it (only the part that has reached
+        # the ledger); Paying Amount is the money taken for the bill plus that
+        # same amount.
+        num = self._receipt_number_formatter()
+        due_adjusted = float(self._receipt_due_adjusted() or 0.0)
+        paid_now = self._receipt_paid_now()
+        prev_before = prev_due + float(self._receipt_due_adjusted_booked() or 0.0)
+        grand_due = amount_total + prev_before
+        paying = paid_now['paid'] + due_adjusted
+        data['bill_total_n'] = num(amount_total)
+        data['prev_due_n'] = num(prev_before)
+        data['grand_due_n'] = num(grand_due)
+        data['paying_n'] = num(paying)
+        data['paying_label'] = paid_now['label']
+        data['change_n'] = num(paid_now['change'])
+        data['show_paid_change'] = paid_now['change'] > 0.0005
+        data['balance_f'] = fmt(grand_due - paying)
+        data['paid_bill_n'] = num(paid_now['paid'])
+        data['show_balance_summary'] = bool(partner) and amount_total >= 0
+
         # Layout blocks: barcode + QR as self-contained base64 (thermal-safe),
         # and a refunded row. All optional — a block only shows when present.
         data['barcode_value'] = self._receipt_barcode_value()
@@ -255,6 +368,7 @@ class DynamicReceiptMixin(models.AbstractModel):
             data['show_dyn_sultanate'] = False
             data['show_dyn_vat'] = False
             data['show_dyn_name_ar'] = False
+            data['show_dyn_customer_details'] = False
             data['show_logo'] = bool(settings.show_logo and settings.logo)
             data['logo'] = self._receipt_logo_b64(settings)
             data['header_title'] = 'INVOICE / فاتورة'

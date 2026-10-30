@@ -117,6 +117,7 @@
                             <field name="show_dyn_gsm" widget="boolean_toggle" nolabel="1"/><span class="ms-1 text-muted">Show</span>
                         </div>
                         <field name="show_dyn_sultanate" widget="boolean_toggle" string="Show Sultanate of Oman"/>
+                        <field name="show_dyn_customer_details" widget="boolean_toggle"/>
                     </group>
                     <group invisible="invoice_template != 'dynamic'">
                         <group string="Header &amp; Footer">

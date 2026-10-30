@@ -78,6 +78,8 @@ class AccountMove(models.Model):
     def _base_receipt_data(self):
         self.ensure_one()
         fmt = self._receipt_money_formatter()
+        num = self._receipt_number_formatter()
+        ar_lang = self._receipt_arabic_lang()
         company = self.company_id or self.env.company
 
         city_state_zip = ', '.join(
@@ -99,8 +101,9 @@ class AccountMove(models.Model):
         items = []
         raw_subtotal = 0.0
         # `display_type` filters out section / note pseudo-lines, which carry no
-        # quantity or price and would otherwise print as empty rows.
-        product_lines = self.invoice_line_ids.filtered(lambda l: not l.display_type)
+        # quantity or price and would otherwise print as empty rows. Odoo 17+
+        # marks real product lines as display_type 'product', so keep those.
+        product_lines = self.invoice_line_ids.filtered(lambda l: l.display_type in (False, 'product'))
         for index, line in enumerate(product_lines):
             qty = float(line.quantity or 0.0)
             unit = float(line.price_unit or 0.0)
@@ -108,14 +111,25 @@ class AccountMove(models.Model):
             raw_subtotal += gross
             discount_pct = float(line.discount or 0.0)
             item_discount = gross * discount_pct / 100.0
+            name = line.name or (line.product_id.display_name if line.product_id else '') or 'Product'
+            code = self._receipt_product_code(line.product_id)
             items.append({
                 'num': index + 1,
-                'name': line.name or (line.product_id.display_name if line.product_id else '') or 'Product',
+                'name': name,
+                'name_c': self._receipt_short_name(name, code),
                 'qty': ('%g' % qty),
                 'unit_f': fmt(unit),
                 'disc_f': ('-%s' % fmt(item_discount)) if item_discount > 0 else '0',
                 'total_f': fmt(line.price_total),
                 'note': '',
+                # Compact Dynamic receipt (plain numbers, no currency symbol).
+                'code': code,
+                'name_ar': self._receipt_product_name_ar(line.product_id, ar_lang),
+                'qty_f': '%.2f' % qty,
+                'rate_n': num(unit),
+                'excl_n': num(line.price_subtotal),
+                'vat_n': num((line.price_total or 0.0) - (line.price_subtotal or 0.0)),
+                'amount_n': num(line.price_total),
             })
 
         amount_total = float(self.amount_total or 0.0)
@@ -137,6 +151,7 @@ class AccountMove(models.Model):
             # drop the series an accounting document is identified by.
             'order_ref': self.name or '',
             'date': date_str,
+            'datetime': self.invoice_date.strftime('%d-%m-%Y') if self.invoice_date else '',
             'items': items,
             'subtotal_f': fmt(raw_subtotal or amount_total),
             'show_discount': rolled_discount > 0,
@@ -144,6 +159,10 @@ class AccountMove(models.Model):
             'show_tax': amount_tax > 0,
             'tax_f': fmt(amount_tax),
             'total_f': fmt(amount_total or raw_subtotal),
+            'discount_n': num(rolled_discount),
+            'untaxed_n': num(amount_total - amount_tax),
+            'tax_n': num(amount_tax),
+            'vat_rate_label': self._receipt_vat_rate_label(product_lines.mapped('tax_ids')),
             'has_payments': has_payments,
             'is_split': len(payments) > 1,
             'payments': payments,

@@ -58,6 +58,23 @@ class PosOrder(models.Model):
              "who genuinely owed nothing from an order placed before this "
              "feature existed (or outside the app), which has no snapshot.",
     )
+    # Part of the money taken with this order that went to the customer's OLD
+    # invoices (Adjust with Due / card over the bill). Written by the app at
+    # Validate; the Dynamic receipt adds it to Paying Amount and back onto
+    # Previous Outstanding, so the balance section shows the figures from
+    # before this visit.
+    due_adjusted_amount = fields.Monetary(
+        string='Paid Towards Old Due',
+        currency_field='currency_id',
+        copy=False, default=0.0,
+        help="Amount taken with this order that was applied to the customer's "
+             "older unpaid invoices instead of being returned as change.",
+    )
+    due_adjusted_payment_id = fields.Many2one(
+        'account.payment', string='Old Due Payment',
+        copy=False, readonly=True, ondelete='set null',
+        help="The customer payment the app posted for Paid Towards Old Due.",
+    )
 
     # ------------------------------------------------------------------
     # Backend button -> open the paper-size popup
@@ -111,6 +128,46 @@ class PosOrder(models.Model):
             return (self.amount_total or 0.0) - (self.account_move.amount_residual or 0.0)
         return self.amount_paid or 0.0
 
+    def _receipt_paid_now(self):
+        """Money actually taken at the counter for this bill.
+
+        Customer Account (pay_later / split_transactions) rows are credit, not
+        money, so they are left out. Change may or may not be stored as its own
+        negative row depending on how the order was synced, so anything left
+        over the bill after netting is treated as change.
+        """
+        self.ensure_one()
+        taken = 0.0
+        names = []
+        for payment in self.payment_ids:
+            method = payment.payment_method_id
+            if method and (method.type == 'pay_later' or method.split_transactions):
+                continue
+            taken += payment.amount or 0.0
+            if method and method.name not in names and (payment.amount or 0.0) > 0:
+                names.append(method.name)
+        total = self.amount_total or 0.0
+        return {
+            'paid': max(0.0, min(taken, total)),
+            'change': max(0.0, taken - total),
+            'label': ' + '.join(names),
+        }
+
+    def _receipt_due_adjusted(self):
+        return self.due_adjusted_amount or 0.0
+
+    def _receipt_due_adjusted_booked(self):
+        """Part of `due_adjusted_amount` already in the customer's ledger.
+
+        On Odoo 18+ a payment whose method has no Outstanding Receipts account
+        is posted WITHOUT a journal entry ("In Process") and only reaches the
+        receivable after bank reconciliation, so it must not be added back
+        onto Previous Outstanding yet."""
+        payment = self.due_adjusted_payment_id
+        if payment and not payment.move_id:
+            return 0.0
+        return self.due_adjusted_amount or 0.0
+
     def _receipt_barcode_value(self):
         self.ensure_one()
         return self.pos_reference or self.name or str(self.id)
@@ -151,6 +208,8 @@ class PosOrder(models.Model):
         """
         self.ensure_one()
         fmt = self._receipt_money_formatter()
+        num = self._receipt_number_formatter()
+        ar_lang = self._receipt_arabic_lang()
         company = self.company_id or self.env.company
 
         city_state_zip = ', '.join(
@@ -181,14 +240,26 @@ class PosOrder(models.Model):
             line_total = line.price_subtotal_incl
             if line_total is False or line_total is None:
                 line_total = line.price_subtotal
+            line_excl = line.price_subtotal or 0.0
+            name = line.full_product_name or (line.product_id.display_name if line.product_id else '') or 'Product'
+            code = self._receipt_product_code(line.product_id)
             items.append({
                 'num': index + 1,
-                'name': line.full_product_name or (line.product_id.display_name if line.product_id else '') or 'Product',
+                'name': name,
+                'name_c': self._receipt_short_name(name, code),
                 'qty': ('%g' % qty),
                 'unit_f': fmt(unit),
                 'disc_f': ('-%s' % fmt(item_discount)) if item_discount > 0 else '0',
                 'total_f': fmt(line_total),
                 'note': line.customer_note or '',
+                # Compact Dynamic receipt (plain numbers, no currency symbol).
+                'code': code,
+                'name_ar': self._receipt_product_name_ar(line.product_id, ar_lang),
+                'qty_f': '%.2f' % qty,
+                'rate_n': num(unit),
+                'excl_n': num(line_excl),
+                'vat_n': num((line_total or 0.0) - line_excl),
+                'amount_n': num(line_total),
             })
 
         amount_total = float(self.amount_total or 0.0)
@@ -206,9 +277,11 @@ class PosOrder(models.Model):
         change_amount = amount_paid - amount_total if amount_paid > amount_total else 0.0
 
         date_str = ''
+        datetime_str = ''
         if self.date_order:
             local_dt = fields.Datetime.context_timestamp(self, self.date_order)
             date_str = local_dt.strftime('%d/%m/%Y')
+            datetime_str = local_dt.strftime('%d-%m-%Y %I:%M %p')
 
         signatures = self._receipt_signatures()
 
@@ -218,6 +291,7 @@ class PosOrder(models.Model):
             'cashier': self.user_id.name if self.user_id else 'Cashier',
             'order_ref': self._extract_order_ref(self.name, self.id),
             'date': date_str,
+            'datetime': datetime_str or date_str,
             'items': items,
             'subtotal_f': fmt(raw_subtotal or amount_total),
             'show_discount': rolled_discount > 0,
@@ -225,6 +299,10 @@ class PosOrder(models.Model):
             'show_tax': amount_tax > 0,
             'tax_f': fmt(amount_tax),
             'total_f': fmt(amount_total or raw_subtotal),
+            'discount_n': num(rolled_discount),
+            'untaxed_n': num(amount_total - amount_tax),
+            'tax_n': num(amount_tax),
+            'vat_rate_label': self._receipt_vat_rate_label(self.lines.mapped('tax_ids')),
             'has_payments': has_payments,
             'is_split': len(payments) > 1,
             'payments': payments,
